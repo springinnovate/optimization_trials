@@ -1,4 +1,19 @@
-"""Try to get minimum land with no less than 90% of service."""
+"""Try to get minimum land with no less than 90% of service.
+
+Here's the plan:
+    * Smooth the rasters w/ a gaussian blur first to flatten out any sharp
+      pixels.
+    * For each variable raster, make a connected components raster (polygon?)
+    * Then make a greatest combined marginal value polygon
+        * Everywhere connected components overlap, make that another polygon
+        * i.e. this polygon is where all the values are the same.
+    * For connected components:
+        * Must be in Cython...
+        * Go by iterblocks
+            * Look for pixel that is not connected and start search
+            * Grow out connected component until no other touching pixels.
+        * Polygonalize by making a point in every pixel center.
+"""
 import glob
 import logging
 import os
@@ -15,10 +30,11 @@ WORKSPACE_DIR = 'workspace_dir'
 CHURN_DIR = os.path.join(WORKSPACE_DIR, 'churn')
 CLIPPED_DIR = os.path.join(CHURN_DIR, 'clipped')
 
-LOGGER = logging.getLogger(__name__)
 logging.basicConfig(
     level=logging.DEBUG,
-    format=('%(message)s'),
+    format=(
+        '%(asctime)s (%(relativeCreated)d) %(levelname)s %(name)s'
+        ' [%(funcName)s:%(lineno)d] %(message)s'),
     stream=sys.stdout)
 LOGGER = logging.getLogger(__name__)
 
@@ -35,10 +51,11 @@ def clamp_to_integer(array, base_nodata, target_nodata):
 def main():
     """Entry point."""
     # convert raster list to just 1-10 integer
-    try:
-        os.makedirs(CHURN_DIR)
-    except OSError:
-        pass
+    for dir_path in [WORKSPACE_DIR, CHURN_DIR, CLIPPED_DIR]:
+        try:
+            os.makedirs(dir_path)
+        except OSError:
+            pass
 
     task_graph = taskgraph.TaskGraph(WORKSPACE_DIR, 8)
 
@@ -69,7 +86,7 @@ def main():
             hash_target_files=False,
             kwargs={'interpolation_method': 'bilinear'},
             dependent_task_list=[make_byte_raster_task],
-            task_name='build overviews for %s' byte_path)
+            task_name='build overviews for %s' % byte_path)
 
     clipped_raster_path_list = [
         os.path.join(CLIPPED_DIR, os.path.basename(path))
