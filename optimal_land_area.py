@@ -195,7 +195,6 @@ def main():
                 'ignore_nodata': True,
                 'working_dir': CHURN_DIR,
                 'target_nodata': TARGET_NODATA},
-            dependent_task_list=[align_task],
             target_path_list=[exponential_kernel_path],
             dependent_task_list=[exponential_kernel_task, align_task],
             task_name='smooth %s' % os.path.basename(raster_path))
