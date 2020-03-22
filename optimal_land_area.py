@@ -216,8 +216,9 @@ def main():
         task_graph.add_task(
             func=ecoshard.build_overviews,
             args=(byte_path,),
-            kwargs={'overview_type': 'external'},
-            kwargs={'interpolation_method': 'bilinear'},
+            kwargs={
+                'overview_type': 'external',
+                'interpolation_method': 'bilinear'},
             dependent_task_list=[make_byte_raster_task],
             task_name='build overviews for %s' % byte_path)
 
