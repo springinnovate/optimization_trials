@@ -200,17 +200,19 @@ def main():
             dependent_task_list=[exponential_kernel_task, align_task],
             task_name='smooth %s' % os.path.basename(raster_path))
 
-        byte_path = os.path.join(CHURN_DIR, os.path.basename(raster_path))
+        byte_path = os.path.join(
+            CHURN_DIR, os.path.basename(smoothed_raster_path))
         byte_path_list.append(byte_path)
         make_byte_raster_task = task_graph.add_task(
             func=pygeoprocessing.raster_calculator,
             args=(
-                [(exponential_kernel_path, 1),
+                [(smoothed_raster_path, 1),
                  (TARGET_NODATA, 'raw'),
                  (255, 'raw')], clamp_to_integer, byte_path,
                 gdal.GDT_Byte, 255),
             hash_target_files=False,
             target_path_list=[byte_path],
+            dependent_task_list=[convolve_2d_task],
             task_name='clamp %s' % byte_path)
         task_graph.add_task(
             func=ecoshard.build_overviews,
