@@ -32,6 +32,7 @@ WORKSPACE_DIR = 'workspace_dir'
 CHURN_DIR = os.path.join(WORKSPACE_DIR, 'churn')
 CLIPPED_DIR = os.path.join(CHURN_DIR, 'clipped')
 SMOOTHED_DIR = os.path.join(CHURN_DIR, 'smoothed')
+OUTPUT_DIR = os.path.join(WORKSPACE_DIR, 'output')
 TARGET_NODATA = -1
 logging.basicConfig(
     level=logging.DEBUG,
@@ -149,7 +150,8 @@ def clamp_to_integer(array, base_nodata, target_nodata):
 def main():
     """Entry point."""
     # convert raster list to just 1-10 integer
-    for dir_path in [WORKSPACE_DIR, CHURN_DIR, CLIPPED_DIR, SMOOTHED_DIR]:
+    for dir_path in [
+            WORKSPACE_DIR, CHURN_DIR, CLIPPED_DIR, SMOOTHED_DIR, OUTPUT_DIR]:
         try:
             os.makedirs(dir_path)
         except OSError:
@@ -200,7 +202,7 @@ def main():
             task_name='smooth %s' % os.path.basename(raster_path))
 
         byte_path = os.path.join(
-            CHURN_DIR, os.path.basename(smoothed_raster_path))
+            OUTPUT_DIR, os.path.basename(smoothed_raster_path))
         byte_path_list.append(byte_path)
         make_byte_raster_task = task_graph.add_task(
             func=pygeoprocessing.raster_calculator,
