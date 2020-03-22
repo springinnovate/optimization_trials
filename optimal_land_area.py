@@ -32,7 +32,7 @@ WORKSPACE_DIR = 'workspace_dir'
 CHURN_DIR = os.path.join(WORKSPACE_DIR, 'churn')
 CLIPPED_DIR = os.path.join(CHURN_DIR, 'clipped')
 SMOOTHED_DIR = os.path.join(CHURN_DIR, 'smoothed')
-
+TARGET_NODATA = -1
 logging.basicConfig(
     level=logging.DEBUG,
     format=(
@@ -193,7 +193,8 @@ def main():
                 smoothed_raster_path),
             kwargs={
                 'ignore_nodata': True,
-                'working_dir': CHURN_DIR},
+                'working_dir': CHURN_DIR,
+                'target_nodata': TARGET_NODATA},
             dependent_task_list=[align_task],
             target_path_list=[exponential_kernel_path],
             dependent_task_list=[exponential_kernel_task, align_task],
@@ -204,8 +205,8 @@ def main():
         make_byte_raster_task = task_graph.add_task(
             func=pygeoprocessing.raster_calculator,
             args=(
-                [(raster_path, 1),
-                 (raster_info['nodata'][0], 'raw'),
+                [(exponential_kernel_path, 1),
+                 (TARGET_NODATA, 'raw'),
                  (255, 'raw')], clamp_to_integer, byte_path,
                 gdal.GDT_Byte, 255),
             hash_target_files=False,
@@ -214,23 +215,12 @@ def main():
         task_graph.add_task(
             func=ecoshard.build_overviews,
             args=(byte_path,),
-            target_path_list=[byte_path],
-            hash_target_files=False,
+            kwargs={'overview_type': 'external'},
             kwargs={'interpolation_method': 'bilinear'},
             dependent_task_list=[make_byte_raster_task],
             task_name='build overviews for %s' % byte_path)
 
     task_graph.join()
-
-    for clipped_path in clipped_raster_path_list:
-        task_graph.add_task(
-            func=ecoshard.build_overviews,
-            args=(clipped_path,),
-            target_path_list=[clipped_path],
-            hash_target_files=False,
-            kwargs={'interpolation_method': 'bilinear'},
-            dependent_task_list=[align_task],
-            task_name='build overviews for %s' % clipped_path)
 
     task_graph.close()
     task_graph.join()
