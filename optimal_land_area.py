@@ -45,6 +45,7 @@ logging.basicConfig(
         ' [%(funcName)s:%(lineno)d] %(message)s'),
     stream=sys.stdout)
 LOGGER = logging.getLogger(__name__)
+logging.getLogger('taskgraph').setLevel(logging.INFO)
 
 
 def sum_raster(raster_path_band):
@@ -55,7 +56,7 @@ def sum_raster(raster_path_band):
     raster_sum = 0.0
     for _, array in pygeoprocessing.iterblocks(raster_path_band):
         valid_mask = ~numpy.isclose(array, nodata)
-        raster_sum += array[valid_mask]
+        raster_sum += numpy.sum(array[valid_mask])
 
     return raster_sum
 
@@ -214,9 +215,19 @@ def main():
 
     sum_list = [sum_task.get() for sum_task in sum_task_list]
 
-    LOGGER.debug('%s', str([
-        (path, sum_val)
-        for path, sum_val in zip(clipped_raster_path_list, sum_list)]))
+    target_sum_list = []
+    raster_path_band_list = []
+    for path, sum_val in zip(clipped_raster_path_list, sum_list):
+        if sum_val > 0:
+            target_sum_list.append(0.5 * sum_val)
+            raster_path_band_list.append((path, 1))
+
+    pygeoprocessing.raster_optimization(
+        raster_path_band_list, target_sum_list,
+        OUTPUT_DIR, target_suffix='experimental')
+
+    task_graph.close()
+    task_graph.join()
 
     # proportion_list = [
     #     target_sum / total_sum_task.get()
