@@ -21,10 +21,12 @@ import math
 import sys
 
 from osgeo import gdal
+from osgeo import ogr
 from osgeo import osr
 import ecoshard
 import numpy
 import pygeoprocessing
+import pygeoprocessing.routing
 import taskgraph
 
 BASE_DATA_DIR = 'data'
@@ -32,7 +34,9 @@ WORKSPACE_DIR = 'workspace_dir'
 CHURN_DIR = os.path.join(WORKSPACE_DIR, 'churn')
 CLIPPED_DIR = os.path.join(CHURN_DIR, 'clipped')
 SMOOTHED_DIR = os.path.join(CHURN_DIR, 'smoothed')
+CONNECTED_COMPONENTS_DIR = os.path.join(WORKSPACE_DIR, 'connected')
 OUTPUT_DIR = os.path.join(WORKSPACE_DIR, 'output')
+PYRAMIDS_DIR = os.path.join(WORKSPACE_DIR, 'pyramid')
 TARGET_NODATA = -1
 logging.basicConfig(
     level=logging.DEBUG,
@@ -41,6 +45,19 @@ logging.basicConfig(
         ' [%(funcName)s:%(lineno)d] %(message)s'),
     stream=sys.stdout)
 LOGGER = logging.getLogger(__name__)
+
+
+def sum_raster(raster_path_band):
+    """Sum the raster and return the result."""
+    nodata = pygeoprocessing.get_raster_info(
+        raster_path_band[0])['nodata'][raster_path_band[1]-1]
+
+    raster_sum = 0.0
+    for _, array in pygeoprocessing.iterblocks(raster_path_band):
+        valid_mask = ~numpy.isclose(array, nodata)
+        raster_sum += array[valid_mask]
+
+    return raster_sum
 
 
 def make_exponential_decay_kernel_raster(expected_distance, kernel_filepath):
@@ -151,13 +168,14 @@ def main():
     """Entry point."""
     # convert raster list to just 1-10 integer
     for dir_path in [
-            WORKSPACE_DIR, CHURN_DIR, CLIPPED_DIR, SMOOTHED_DIR, OUTPUT_DIR]:
+            WORKSPACE_DIR, CHURN_DIR, CLIPPED_DIR, SMOOTHED_DIR,
+            CONNECTED_COMPONENTS_DIR, OUTPUT_DIR, PYRAMIDS_DIR]:
         try:
             os.makedirs(dir_path)
         except OSError:
             pass
 
-    task_graph = taskgraph.TaskGraph(WORKSPACE_DIR, 8)
+    task_graph = taskgraph.TaskGraph(WORKSPACE_DIR, 8, 5.0)
     exponential_kernel_path = os.path.join(CHURN_DIR, 'exponential_kernel.tif')
     exponential_kernel_task = task_graph.add_task(
         func=make_exponential_decay_kernel_raster,
@@ -176,58 +194,153 @@ def main():
         func=pygeoprocessing.align_and_resize_raster_stack,
         args=(
             raster_path_list, clipped_raster_path_list,
-            ['near'] * len(clipped_raster_path_list),
+            ['bilinear'] * len(clipped_raster_path_list),
             [target_pixel_length, -target_pixel_length],
+            #'intersection'),
             [-124, 41, -121, 39]),
         hash_target_files=False,
         target_path_list=clipped_raster_path_list,
         task_name='clip align task')
 
-    byte_path_list = []
+    align_task.join()
+
+    sum_task_list = []
     for raster_path in clipped_raster_path_list:
-        smoothed_raster_path = os.path.join(
-            SMOOTHED_DIR, os.path.basename(raster_path))
+        sum_task = task_graph.add_task(
+            func=sum_raster,
+            args=((raster_path, 1),),
+            task_name='sum %s' % str(raster_path))
+        sum_task_list.append(sum_task)
 
-        convolve_2d_task = task_graph.add_task(
-            func=pygeoprocessing.convolve_2d,
-            args=(
-                (raster_path, 1), (exponential_kernel_path, 1),
-                smoothed_raster_path),
-            kwargs={
-                'ignore_nodata': True,
-                'working_dir': CHURN_DIR,
-                'target_nodata': TARGET_NODATA},
-            target_path_list=[exponential_kernel_path],
-            dependent_task_list=[exponential_kernel_task, align_task],
-            task_name='smooth %s' % os.path.basename(raster_path))
+    sum_list = [sum_task.get() for sum_task in sum_task_list]
 
-        byte_path = os.path.join(
-            OUTPUT_DIR, os.path.basename(smoothed_raster_path))
-        byte_path_list.append(byte_path)
-        make_byte_raster_task = task_graph.add_task(
-            func=pygeoprocessing.raster_calculator,
-            args=(
-                [(smoothed_raster_path, 1),
-                 (TARGET_NODATA, 'raw'),
-                 (255, 'raw')], clamp_to_integer, byte_path,
-                gdal.GDT_Byte, 255),
-            hash_target_files=False,
-            target_path_list=[byte_path],
-            dependent_task_list=[convolve_2d_task],
-            task_name='clamp %s' % byte_path)
-        task_graph.add_task(
-            func=ecoshard.build_overviews,
-            args=(byte_path,),
-            kwargs={
-                'overview_type': 'external',
-                'interpolation_method': 'bilinear'},
-            dependent_task_list=[make_byte_raster_task],
-            task_name='build overviews for %s' % byte_path)
+    LOGGER.debug('%s', str([
+        (path, sum_val)
+        for path, sum_val in zip(clipped_raster_path_list, sum_list)]))
 
-    task_graph.join()
+    # proportion_list = [
+    #     target_sum / total_sum_task.get()
+    #     for target_sum, total_sum_task in zip(target_sum_list, sum_task_list)]
 
+    return
+    # this is old but keep for now
+    # n_cols, n_rows = pygeoprocessing.get_raster_info(
+    #     clipped_raster_path_list[0])['raster_size']
+    # for raster_path in clipped_raster_path_list:
+    #     min_size = min(n_cols, n_rows)
+    #     level = 0
+    #     previous_level_path = raster_path
+    #     previous_level_dep_list = []
+    #     while min_size > 4:
+    #         level_raster_path = os.path.join(
+    #             PYRAMIDS_DIR, '%d_%s' % (level, os.path.basename(raster_path)))
+    #         level_task = task_graph.add_task(
+    #             func=ecoshard.convolve_layer,
+    #             args=(
+    #                 previous_level_path, 2, 'sum', level_raster_path),
+    #             target_path_list=[level_raster_path],
+    #             dependent_task_list=previous_level_dep_list,
+    #             task_name='make %s' % os.path.basename(level_raster_path))
+    #         task_graph.add_task(
+    #             func=ecoshard.build_overviews,
+    #             args=(level_raster_path,),
+    #             kwargs={
+    #                 'overview_type': 'external',
+    #                 'interpolation_method': 'bilinear'},
+    #             dependent_task_list=[level_task],
+    #             task_name='build overviews for %s' % os.path.basename(
+    #                 level_raster_path))
+    #         previous_level_dep_list = [level_task]
+    #         previous_level_path = level_raster_path
+    #         min_size /= 2
+    #         level += 1
+
+
+    # OLD STUFF:
+    # for raster_path in clipped_raster_path_list:
+    #     smoothed_raster_path = os.path.join(
+    #         SMOOTHED_DIR, os.path.basename(raster_path))
+
+    #     convolve_2d_task = task_graph.add_task(
+    #         func=pygeoprocessing.convolve_2d,
+    #         args=(
+    #             (raster_path, 1), (exponential_kernel_path, 1),
+    #             smoothed_raster_path),
+    #         kwargs={
+    #             'ignore_nodata': True,
+    #             'working_dir': CHURN_DIR,
+    #             'target_nodata': TARGET_NODATA},
+    #         target_path_list=[exponential_kernel_path],
+    #         dependent_task_list=[exponential_kernel_task, align_task],
+    #         task_name='smooth %s' % os.path.basename(raster_path))
+
+    #     byte_path = os.path.join(
+    #         OUTPUT_DIR, os.path.basename(smoothed_raster_path))
+    #     byte_path_list.append(byte_path)
+    #     make_byte_raster_task = task_graph.add_task(
+    #         func=pygeoprocessing.raster_calculator,
+    #         args=(
+    #             [(smoothed_raster_path, 1),
+    #              (TARGET_NODATA, 'raw'),
+    #              (255, 'raw')], clamp_to_integer, byte_path,
+    #             gdal.GDT_Byte, 255),
+    #         hash_target_files=False,
+    #         target_path_list=[byte_path],
+    #         dependent_task_list=[convolve_2d_task],
+    #         task_name='clamp %s' % byte_path)
+
+    #     task_graph.add_task(
+    #         func=ecoshard.build_overviews,
+    #         args=(byte_path,),
+    #         kwargs={
+    #             'overview_type': 'external',
+    #             'interpolation_method': 'bilinear'},
+    #         dependent_task_list=[make_byte_raster_task],
+    #         task_name='build overviews for %s' % byte_path)
+
+    #     similar_regions_vector_path = os.path.join(
+    #         CONNECTED_COMPONENTS_DIR, '%s.gpkg' % os.path.splitext(
+    #             os.path.basename(byte_path))[0])
+
+    #     task_graph.add_task(
+    #         func=polygonize,
+    #         args=((byte_path, 1), similar_regions_vector_path),
+    #         target_path_list=[similar_regions_vector_path],
+    #         dependent_task_list=[make_byte_raster_task],
+    #         task_name='Polygonalize %s' % os.path.basename(
+    #             similar_regions_vector_path))
     task_graph.close()
     task_graph.join()
+
+
+def polygonize(base_raster_path_band, target_vector_path):
+    """Polygonize base to target.
+
+    Parameters:
+        base_raster_path_band (str): path to base raster file.
+        target_vector_path (str): path to vector that will be created making
+            polygons over similar/connected regions.
+
+    Returns:
+        None.
+
+    """
+    raster = gdal.OpenEx(base_raster_path_band[0], gdal.OF_RASTER)
+    band = raster.GetRasterBand(base_raster_path_band[1])
+
+    spatial_ref = osr.SpatialReference()
+    spatial_ref.ImportFromWkt(raster.GetProjection())
+
+    driver = ogr.GetDriverByName('GPKG')
+    poly_vector = driver.CreateDataSource(target_vector_path)
+
+    poly_layer = poly_vector.CreateLayer(
+        os.path.splitext(os.path.basename(target_vector_path))[0], spatial_ref,
+        ogr.wkbPolygon)
+    poly_layer.CreateField(ogr.FieldDefn('value', ogr.OFTInteger))
+    gdal.Polygonize(
+        band, None, poly_layer, 0, ['CONNECTED8'],
+        callback=gdal.TermProgress_nocb)
 
 
 if __name__ == '__main__':
