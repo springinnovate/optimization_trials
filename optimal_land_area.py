@@ -202,11 +202,38 @@ def main():
         hash_target_files=False,
         target_path_list=clipped_raster_path_list,
         task_name='clip align task')
-
     align_task.join()
 
-    sum_task_list = []
+    dims_set = set()
+    smoothed_raster_path_list = []
     for raster_path in clipped_raster_path_list:
+        dims = pygeoprocessing.get_raster_info(raster_path)['raster_size']
+        if len(dims_set) > 0 and (dims not in dims_set):
+            continue
+        dims_set.add(dims)
+
+        smoothed_raster_path = os.path.join(
+            SMOOTHED_DIR, os.path.basename(raster_path))
+        smoothed_raster_path_list.append(smoothed_raster_path)
+
+        convolve_2d_task = task_graph.add_task(
+            func=pygeoprocessing.convolve_2d,
+            args=(
+                (raster_path, 1), (exponential_kernel_path, 1),
+                smoothed_raster_path),
+            kwargs={
+                'ignore_nodata': True,
+                'working_dir': CHURN_DIR,
+                'target_nodata': TARGET_NODATA},
+            target_path_list=[exponential_kernel_path],
+            dependent_task_list=[exponential_kernel_task, align_task],
+            task_name='smooth %s' % os.path.basename(raster_path))
+
+    task_graph.join()
+
+    sum_task_list = []
+    for raster_path in smoothed_raster_path_list:
+        dims = pygeoprocessing.get_raster_info(raster_path)['raster_size']
         sum_task = task_graph.add_task(
             func=sum_raster,
             args=((raster_path, 1),),
@@ -217,11 +244,12 @@ def main():
 
     target_sum_list = []
     raster_path_band_list = []
-    for path, sum_val in zip(clipped_raster_path_list, sum_list):
+    for path, sum_val in zip(smoothed_raster_path_list, sum_list):
         if sum_val > 0:
             target_sum_list.append(0.5 * sum_val)
             raster_path_band_list.append((path, 1))
 
+    LOGGER.debug(raster_path_band_list)
     pygeoprocessing.raster_optimization(
         raster_path_band_list, target_sum_list,
         OUTPUT_DIR, target_suffix='experimental')
