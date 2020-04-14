@@ -13,17 +13,18 @@ Here's the plan:
             * Look for pixel that is not connected and start search
             * Grow out connected component until no other touching pixels.
         * Polygonalize by making a point in every pixel center.
+
 """
 import glob
 import logging
 import os
 import math
 import sys
+import tempfile
 
 from osgeo import gdal
 from osgeo import ogr
 from osgeo import osr
-import ecoshard
 import numpy
 import pygeoprocessing
 import pygeoprocessing.routing
@@ -33,11 +34,10 @@ BASE_DATA_DIR = 'data'
 WORKSPACE_DIR = 'workspace_dir'
 CHURN_DIR = os.path.join(WORKSPACE_DIR, 'churn')
 CLIPPED_DIR = os.path.join(CHURN_DIR, 'clipped')
-SMOOTHED_DIR = os.path.join(CHURN_DIR, 'smoothed')
-CONNECTED_COMPONENTS_DIR = os.path.join(WORKSPACE_DIR, 'connected')
 OUTPUT_DIR = os.path.join(WORKSPACE_DIR, 'output')
-PYRAMIDS_DIR = os.path.join(WORKSPACE_DIR, 'pyramid')
+PROPORTIONAL_DIR = os.path.join(WORKSPACE_DIR, 'proportional_rasters')
 TARGET_NODATA = -1
+PROP_NODATA = -1
 logging.basicConfig(
     level=logging.DEBUG,
     format=(
@@ -61,12 +61,48 @@ def sum_raster(raster_path_band):
     return raster_sum
 
 
+def make_neighborhood_hat_kernel(kernel_size, kernel_filepath):
+    """Make a hat kernel that's the sum in the center and 1 <= kernel_size.
+
+    Args:
+        kernel_size (int): kernel should be kernel_size X kernel_size
+        kernel_filepath (str): path to target kernel.
+
+    Returns:
+        None
+
+    """
+    driver = gdal.GetDriverByName('GTiff')
+    kernel_raster = driver.Create(
+        kernel_filepath, kernel_size, kernel_size, 1, gdal.GDT_Float32)
+    kernel_raster.SetGeoTransform([0, 1, 0, 0, 0, -1])
+    srs = osr.SpatialReference()
+    srs.SetWellKnownGeogCS('WGS84')
+    kernel_raster.SetProjection(srs.ExportToWkt())
+
+    kernel_band = kernel_raster.GetRasterBand(1)
+    kernel_band.SetNoDataValue(-9999)
+
+    kernel_array = (numpy.sqrt(numpy.sum(
+        [(index - kernel_size//2)**2
+         for index in numpy.meshgrid(
+            range(kernel_size), range(kernel_size))], axis=0)) <=
+        kernel_size//2).astype(numpy.uint8)
+
+    # make the center the sum of the area of the circle so it's always on
+    kernel_array[kernel_array//2, kernel_array//2] = (
+        3.14159 * (kernel_size//2+1)**2)
+    kernel_band.WriteArray(kernel_array)
+    kernel_band = None
+    kernel_raster = None
+
+
 def make_exponential_decay_kernel_raster(expected_distance, kernel_filepath):
     """Create a raster-based exponential decay kernel.
 
     The raster created will be a tiled GeoTiff, with 256x256 memory blocks.
 
-    Parameters:
+    Args:
         expected_distance (int or float): The distance (in pixels) of the
             kernel's radius, the distance at which the value of the decay
             function is equal to `1/e`.
@@ -165,24 +201,96 @@ def clamp_to_integer(array, base_nodata, target_nodata):
     return result
 
 
+def overlap_count_op(*array_nodata_list):
+    """Count valid overlap.
+
+    Args:
+        array_nodata_list (list): a 2*n length list containing n arrays
+            followed by n coresponding nodata values.
+
+    Returns:
+        a count of non-nodata overlaps for each element.
+
+    """
+    result = numpy.zeros(array_nodata_list[0].shape)
+    n = len(array_nodata_list) // 2
+    for array, nodata in zip(array_nodata_list[0:n], array_nodata_list[n::]):
+        valid_mask = ~numpy.isclose(array, nodata)
+        result[valid_mask] += 1
+    return result
+
+
+def smooth_mask(base_mask_path, smooth_radius, target_smooth_mask_path):
+    """Fill in gaps in base mask if there are neighbors.
+
+    Args:
+        base_mask_path (str): path to base raster, should be 0, 1 and nodata.
+        smooth_radius (int): how far to smooth out at a max radius?
+        target_smooth_mask_path (str): target smoothed file.
+
+    Returns:
+        None.
+
+    """
+    kernel_size = smooth_radius*2+1
+    working_dir = tempfile.mkdtemp(
+        dir=os.path.dirname(target_smooth_mask_path))
+    kernel_path = os.path.join(working_dir, f'kernel_{kernel_size}.tif')
+    make_neighborhood_hat_kernel(kernel_size, kernel_path)
+
+    convolved_raster_path = os.path.join(working_dir, 'convolved_mask.tif')
+    byte_nodata = 255
+    pygeoprocessing.convolve_2d(
+        (base_mask_path, 1), (kernel_path, 1), convolved_raster_path,
+        ignore_nodata=False, working_dir=working_dir, mask_nodata=False,
+        target_nodata=TARGET_NODATA)
+
+    # set required proportion of coverage to turn on a pixel, lets make it a
+    # quarter wedge.
+    proportion_covered = 0.01
+    threshold_val = proportion_covered * 3.14159 * (smooth_radius+1)**2
+    pygeoprocessing.raster_calculator(
+        [(convolved_raster_path, 1), (threshold_val, 'raw'),
+         (TARGET_NODATA, 'raw'), (byte_nodata, 'raw'), ], threshold_op,
+        target_smooth_mask_path, gdal.GDT_Byte, byte_nodata)
+
+    # try:
+    #     shutil.rmtree(working_dir)
+    # except OSError:
+    #     LOGGER.warn("couldn't delete %s", working_dir)
+    #     pass
+
+
+def threshold_op(base_array, threshold_val, base_nodata, target_nodata):
+    """Threshold base to 1 where val >= threshold_val."""
+    result = numpy.empty(base_array.shape, dtype=numpy.uint8)
+    result[:] = target_nodata
+    valid_mask = ~numpy.isclose(base_array, base_nodata) & (
+        ~numpy.isclose(base_array, 0))
+    result[valid_mask] = base_array[valid_mask] >= threshold_val
+    return result
+
+
+def proportion_op(base_array, total_sum, base_nodata, target_nodata):
+    """Divide base by total and guard against nodata."""
+    result = numpy.empty(base_array.shape, dtype=numpy.float64)
+    result[:] = target_nodata
+    valid_mask = ~numpy.isclose(base_array, base_nodata)
+    result[valid_mask] = (
+        base_array[valid_mask].astype(numpy.float64) / total_sum)
+    return result
+
+
 def main():
     """Entry point."""
     # convert raster list to just 1-10 integer
-    for dir_path in [
-            WORKSPACE_DIR, CHURN_DIR, CLIPPED_DIR, SMOOTHED_DIR,
-            CONNECTED_COMPONENTS_DIR, OUTPUT_DIR, PYRAMIDS_DIR]:
+    for dir_path in [WORKSPACE_DIR, CHURN_DIR, CLIPPED_DIR, OUTPUT_DIR]:
         try:
             os.makedirs(dir_path)
         except OSError:
             pass
 
-    task_graph = taskgraph.TaskGraph(WORKSPACE_DIR, 8, 5.0)
-    exponential_kernel_path = os.path.join(CHURN_DIR, 'exponential_kernel.tif')
-    exponential_kernel_task = task_graph.add_task(
-        func=make_exponential_decay_kernel_raster,
-        args=(6, exponential_kernel_path),
-        target_path_list=[exponential_kernel_path],
-        task_name='make exponential kernel')
+    task_graph = taskgraph.TaskGraph(WORKSPACE_DIR, -1, 5.0)
 
     raster_path_list = glob.glob(os.path.join(BASE_DATA_DIR, '*.tif'))
     clipped_raster_path_list = [
@@ -197,165 +305,73 @@ def main():
             raster_path_list, clipped_raster_path_list,
             ['bilinear'] * len(clipped_raster_path_list),
             [target_pixel_length, -target_pixel_length],
-            #'intersection'),
+            # 'intersection'),
             [-124, 41, -121, 39]),
         hash_target_files=False,
         target_path_list=clipped_raster_path_list,
         task_name='clip align task')
-    align_task.join()
-
-    dims_set = set()
-    smoothed_raster_path_list = []
-    for raster_path in clipped_raster_path_list:
-        dims = pygeoprocessing.get_raster_info(raster_path)['raster_size']
-        if len(dims_set) > 0 and (dims not in dims_set):
-            continue
-        dims_set.add(dims)
-
-        smoothed_raster_path = os.path.join(
-            SMOOTHED_DIR, os.path.basename(raster_path))
-        smoothed_raster_path_list.append(smoothed_raster_path)
-
-        convolve_2d_task = task_graph.add_task(
-            func=pygeoprocessing.convolve_2d,
-            args=(
-                (raster_path, 1), (exponential_kernel_path, 1),
-                smoothed_raster_path),
-            kwargs={
-                'ignore_nodata': True,
-                'working_dir': CHURN_DIR,
-                'target_nodata': TARGET_NODATA},
-            target_path_list=[exponential_kernel_path],
-            dependent_task_list=[exponential_kernel_task, align_task],
-            task_name='smooth %s' % os.path.basename(raster_path))
-
-    task_graph.join()
 
     sum_task_list = []
-    for raster_path in smoothed_raster_path_list:
-        dims = pygeoprocessing.get_raster_info(raster_path)['raster_size']
+    align_task.join()
+    for raster_path in clipped_raster_path_list:
         sum_task = task_graph.add_task(
             func=sum_raster,
             args=((raster_path, 1),),
+            dependent_task_list=[align_task],
             task_name='sum %s' % str(raster_path))
         sum_task_list.append(sum_task)
+    task_graph.join()
+    task_graph.close()
+    del task_graph
 
     sum_list = [sum_task.get() for sum_task in sum_task_list]
 
     target_sum_list = []
     raster_path_band_list = []
-    for path, sum_val in zip(smoothed_raster_path_list, sum_list):
+    raster_nodata_list = []
+    for path, sum_val in zip(clipped_raster_path_list, sum_list):
         if sum_val > 0:
             target_sum_list.append(0.5 * sum_val)
             raster_path_band_list.append((path, 1))
+            raster_nodata_list.append(
+                (pygeoprocessing.get_raster_info(path)['nodata'][0], 'raw'))
+            proportional_path = os.path.join(
+                PROPORTIONAL_DIR, f'prop_{os.path.basename(path)}')
+            pygeoprocessing.raster_calculator(
+                [(path, 1), (sum_val, 'raw'),
+                 (pygeoprocessing.get_raster_info(path)['nodata'][0], 'raw'),
+                 (PROP_NODATA, 'raw')],
+                proportion_op, proportional_path, gdal.GDT_Float64,
+                PROP_NODATA)
 
-    LOGGER.debug(raster_path_band_list)
-    pygeoprocessing.raster_optimization(
-        raster_path_band_list, target_sum_list,
-        OUTPUT_DIR, target_suffix='experimental')
-
-    task_graph.close()
-    task_graph.join()
-
-    # proportion_list = [
-    #     target_sum / total_sum_task.get()
-    #     for target_sum, total_sum_task in zip(target_sum_list, sum_task_list)]
+    overlap_raster_count_path = os.path.join(CHURN_DIR, 'overlap_count.tif')
+    pygeoprocessing.raster_calculator(
+        raster_path_band_list + raster_nodata_list, overlap_count_op,
+        overlap_raster_count_path, gdal.GDT_Byte, 0)
 
     return
-    # this is old but keep for now
-    # n_cols, n_rows = pygeoprocessing.get_raster_info(
-    #     clipped_raster_path_list[0])['raster_size']
-    # for raster_path in clipped_raster_path_list:
-    #     min_size = min(n_cols, n_rows)
-    #     level = 0
-    #     previous_level_path = raster_path
-    #     previous_level_dep_list = []
-    #     while min_size > 4:
-    #         level_raster_path = os.path.join(
-    #             PYRAMIDS_DIR, '%d_%s' % (level, os.path.basename(raster_path)))
-    #         level_task = task_graph.add_task(
-    #             func=ecoshard.convolve_layer,
-    #             args=(
-    #                 previous_level_path, 2, 'sum', level_raster_path),
-    #             target_path_list=[level_raster_path],
-    #             dependent_task_list=previous_level_dep_list,
-    #             task_name='make %s' % os.path.basename(level_raster_path))
-    #         task_graph.add_task(
-    #             func=ecoshard.build_overviews,
-    #             args=(level_raster_path,),
-    #             kwargs={
-    #                 'overview_type': 'external',
-    #                 'interpolation_method': 'bilinear'},
-    #             dependent_task_list=[level_task],
-    #             task_name='build overviews for %s' % os.path.basename(
-    #                 level_raster_path))
-    #         previous_level_dep_list = [level_task]
-    #         previous_level_path = level_raster_path
-    #         min_size /= 2
-    #         level += 1
 
+    LOGGER.debug(raster_path_band_list)
+    target_suffix = 'experimental'
+    pygeoprocessing.raster_optimization(
+        raster_path_band_list, target_sum_list,
+        OUTPUT_DIR, target_suffix=target_suffix)
 
-    # OLD STUFF:
-    # for raster_path in clipped_raster_path_list:
-    #     smoothed_raster_path = os.path.join(
-    #         SMOOTHED_DIR, os.path.basename(raster_path))
+    # target
+    optimal_raw_mask_path = os.path.join(
+        OUTPUT_DIR, f'optimal_mask_{target_suffix}.tif')
 
-    #     convolve_2d_task = task_graph.add_task(
-    #         func=pygeoprocessing.convolve_2d,
-    #         args=(
-    #             (raster_path, 1), (exponential_kernel_path, 1),
-    #             smoothed_raster_path),
-    #         kwargs={
-    #             'ignore_nodata': True,
-    #             'working_dir': CHURN_DIR,
-    #             'target_nodata': TARGET_NODATA},
-    #         target_path_list=[exponential_kernel_path],
-    #         dependent_task_list=[exponential_kernel_task, align_task],
-    #         task_name='smooth %s' % os.path.basename(raster_path))
+    smoothed_mask_path = os.path.join(
+        OUTPUT_DIR, f'smoothed_mask_{target_suffix}.tif')
 
-    #     byte_path = os.path.join(
-    #         OUTPUT_DIR, os.path.basename(smoothed_raster_path))
-    #     byte_path_list.append(byte_path)
-    #     make_byte_raster_task = task_graph.add_task(
-    #         func=pygeoprocessing.raster_calculator,
-    #         args=(
-    #             [(smoothed_raster_path, 1),
-    #              (TARGET_NODATA, 'raw'),
-    #              (255, 'raw')], clamp_to_integer, byte_path,
-    #             gdal.GDT_Byte, 255),
-    #         hash_target_files=False,
-    #         target_path_list=[byte_path],
-    #         dependent_task_list=[convolve_2d_task],
-    #         task_name='clamp %s' % byte_path)
-
-    #     task_graph.add_task(
-    #         func=ecoshard.build_overviews,
-    #         args=(byte_path,),
-    #         kwargs={
-    #             'overview_type': 'external',
-    #             'interpolation_method': 'bilinear'},
-    #         dependent_task_list=[make_byte_raster_task],
-    #         task_name='build overviews for %s' % byte_path)
-
-    #     similar_regions_vector_path = os.path.join(
-    #         CONNECTED_COMPONENTS_DIR, '%s.gpkg' % os.path.splitext(
-    #             os.path.basename(byte_path))[0])
-
-    #     task_graph.add_task(
-    #         func=polygonize,
-    #         args=((byte_path, 1), similar_regions_vector_path),
-    #         target_path_list=[similar_regions_vector_path],
-    #         dependent_task_list=[make_byte_raster_task],
-    #         task_name='Polygonalize %s' % os.path.basename(
-    #             similar_regions_vector_path))
-    task_graph.close()
-    task_graph.join()
+    smooth_radius = 3
+    smooth_mask(optimal_raw_mask_path, smooth_radius, smoothed_mask_path)
 
 
 def polygonize(base_raster_path_band, target_vector_path):
     """Polygonize base to target.
 
-    Parameters:
+    Args:
         base_raster_path_band (str): path to base raster file.
         target_vector_path (str): path to vector that will be created making
             polygons over similar/connected regions.
