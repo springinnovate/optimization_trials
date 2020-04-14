@@ -304,7 +304,10 @@ def main():
 
     task_graph = taskgraph.TaskGraph(WORKSPACE_DIR, -1, 5.0)
 
-    raster_path_list = glob.glob(os.path.join(BASE_DATA_DIR, '*.tif'))
+    raster_path_list = [
+        path for path in
+        glob.glob(os.path.join(BASE_DATA_DIR, '*.tif'))
+        if 'nodata0' in path]
     clipped_raster_path_list = [
         os.path.join(CLIPPED_DIR, os.path.basename(path))
         for path in raster_path_list]
@@ -323,74 +326,86 @@ def main():
         target_path_list=clipped_raster_path_list,
         task_name='clip align task')
 
-    sum_task_list = []
-    align_task.join()
-    for raster_path in clipped_raster_path_list:
-        sum_task = task_graph.add_task(
-            func=sum_raster,
-            args=((raster_path, 1),),
-            dependent_task_list=[align_task],
-            task_name='sum %s' % str(raster_path))
-        sum_task_list.append(sum_task)
+    # overlap_raster_count_path = os.path.join(CHURN_DIR, 'overlap_count.tif')
+    # task_graph.add_task(
+    #     func=pygeoprocessing.raster_calculator,
+    #     args=(
+    #         raster_path_band_list + raster_nodata_list, overlap_count_op,
+    #         overlap_raster_count_path, gdal.GDT_Byte, 0),
+    #     target_path_list=[overlap_raster_count_path],
+    #     task_name='count valid overlaps')
 
-    sum_list = [sum_task.get() for sum_task in sum_task_list]
+    # sum_task_list = []
+    # align_task.join()
+    # for raster_path in clipped_raster_path_list:
+    #     sum_task = task_graph.add_task(
+    #         func=sum_raster,
+    #         args=((raster_path, 1),),
+    #         dependent_task_list=[align_task],
+    #         task_name='sum %s' % str(raster_path))
+    #     sum_task_list.append(sum_task)
+
+    # sum_list = [sum_task.get() for sum_task in sum_task_list]
+
+    # target_sum_list = []
+    # raster_path_band_list = []
+    # raster_nodata_list = []
+    # proportion_raster_band_path_list = []
+    # prop_task_list = []
+    # for path, sum_val in zip(clipped_raster_path_list, sum_list):
+    #     if sum_val > 0:
+    #         target_sum_list.append(0.5 * sum_val)
+    #         raster_path_band_list.append((path, 1))
+    #         raster_nodata_list.append(
+    #             (pygeoprocessing.get_raster_info(path)['nodata'][0], 'raw'))
+    #         proportional_path = os.path.join(
+    #             PROPORTIONAL_DIR, f'prop_{os.path.basename(path)}')
+    #         prop_task = task_graph.add_task(
+    #             func=pygeoprocessing.raster_calculator,
+    #             args=([
+    #                 (path, 1), (sum_val, 'raw'),
+    #                 (pygeoprocessing.get_raster_info(path)['nodata'][0],
+    #                  'raw'),
+    #                 (PROP_NODATA, 'raw')], proportion_op, proportional_path,
+    #                 gdal.GDT_Float64, PROP_NODATA),
+    #             target_path_list=[proportional_path],
+    #             task_name=f'calculate proportion for {proportional_path}')
+    #         proportion_raster_band_path_list.append((proportional_path, 1))
+    #         prop_task_list.append(prop_task)
+
+    # proportion_sum_raster_path = os.path.join(CHURN_DIR, 'prop_sum.tif')
+    # task_graph.add_task(
+    #     func=pygeoprocessing.raster_calculator,
+    #     args=(
+    #         [(PROP_NODATA, 'raw'), *proportion_raster_band_path_list],
+    #         sum_rasters_op, proportion_sum_raster_path, gdal.GDT_Float64,
+    #         PROP_NODATA),
+    #     dependent_task_list=prop_task_list,
+    #     target_path_list=[proportion_sum_raster_path],
+    #     task_name='calc proportion sum')
 
     target_sum_list = []
-    raster_path_band_list = []
-    raster_nodata_list = []
-    proportion_raster_band_path_list = []
-    prop_task_list = []
-    for path, sum_val in zip(clipped_raster_path_list, sum_list):
-        if sum_val > 0:
-            target_sum_list.append(0.5 * sum_val)
-            raster_path_band_list.append((path, 1))
-            raster_nodata_list.append(
-                (pygeoprocessing.get_raster_info(path)['nodata'][0], 'raw'))
-            proportional_path = os.path.join(
-                PROPORTIONAL_DIR, f'prop_{os.path.basename(path)}')
-            prop_task = task_graph.add_task(
-                func=pygeoprocessing.raster_calculator,
-                args=([
-                    (path, 1), (sum_val, 'raw'),
-                    (pygeoprocessing.get_raster_info(path)['nodata'][0],
-                     'raw'),
-                    (PROP_NODATA, 'raw')], proportion_op, proportional_path,
-                    gdal.GDT_Float64, PROP_NODATA),
-                target_path_list=[proportional_path],
-                task_name=f'calculate proportion for {proportional_path}')
-            proportion_raster_band_path_list.append((proportional_path, 1))
-            prop_task_list.append(prop_task)
+    sum_task_list = []
+    for raster_path in clipped_raster_path_list:
+        sum_task_list.append(
+            task_graph.add_task(
+                func=sum_raster,
+                args=((raster_path, 1),),
+                dependent_task_list=[align_task],
+                task_name='sum %s' % str(raster_path)))
 
-    overlap_raster_count_path = os.path.join(CHURN_DIR, 'overlap_count.tif')
-    task_graph.add_task(
-        func=pygeoprocessing.raster_calculator,
-        args=(
-            raster_path_band_list + raster_nodata_list, overlap_count_op,
-            overlap_raster_count_path, gdal.GDT_Byte, 0),
-        target_path_list=[overlap_raster_count_path],
-        task_name='count valid overlaps')
-
-    proportion_sum_raster_path = os.path.join(CHURN_DIR, 'prop_sum.tif')
-    task_graph.add_task(
-        func=pygeoprocessing.raster_calculator,
-        args=(
-            [(PROP_NODATA, 'raw'), *proportion_raster_band_path_list],
-            sum_rasters_op, proportion_sum_raster_path, gdal.GDT_Float64,
-            PROP_NODATA),
-        dependent_task_list=prop_task_list,
-        target_path_list=[proportion_sum_raster_path],
-        task_name='calc proportion sum')
+    target_sum_list = [0.5 * sum_task.get() for sum_task in sum_task_list]
 
     task_graph.join()
     task_graph.close()
     del task_graph
-    return
 
-    LOGGER.debug(raster_path_band_list)
     target_suffix = 'experimental'
     pygeoprocessing.raster_optimization(
-        raster_path_band_list, target_sum_list,
+        [(x, 1) for x in clipped_raster_path_list], target_sum_list,
         OUTPUT_DIR, target_suffix=target_suffix)
+
+    return
 
     # target
     optimal_raw_mask_path = os.path.join(
