@@ -282,13 +282,14 @@ def proportion_op(base_array, total_sum, base_nodata, target_nodata):
 
 
 def sum_rasters_op(nodata, *array_list):
+    """Sum all non-nodata pixels in array_list."""
     result = numpy.zeros(array_list[0].shape)
-    nodata_mask = numpy.zeros(array_list[0].shape, dtype=numpy.bool)
+    total_valid_mask = numpy.zeros(array_list[0].shape, dtype=numpy.bool)
     for array in array_list:
         valid_mask = ~numpy.isclose(array, nodata)
-        nodata_mask |= valid_mask
+        total_valid_mask |= valid_mask
         result[valid_mask] += array[valid_mask]
-    result[nodata_mask] = nodata
+    result[~total_valid_mask] = nodata
     return result
 
 
@@ -361,20 +362,28 @@ def main():
             prop_task_list.append(prop_task)
 
     overlap_raster_count_path = os.path.join(CHURN_DIR, 'overlap_count.tif')
-    pygeoprocessing.raster_calculator(
-        raster_path_band_list + raster_nodata_list, overlap_count_op,
-        overlap_raster_count_path, gdal.GDT_Byte, 0)
+    task_graph.add_task(
+        func=pygeoprocessing.raster_calculator,
+        args=(
+            raster_path_band_list + raster_nodata_list, overlap_count_op,
+            overlap_raster_count_path, gdal.GDT_Byte, 0),
+        target_path_list=[overlap_raster_count_path],
+        task_name='count valid overlaps')
+
+    proportion_sum_raster_path = os.path.join(CHURN_DIR, 'prop_sum.tif')
+    task_graph.add_task(
+        func=pygeoprocessing.raster_calculator,
+        args=(
+            [(PROP_NODATA, 'raw'), *proportion_raster_band_path_list],
+            sum_rasters_op, proportion_sum_raster_path, gdal.GDT_Float64,
+            PROP_NODATA),
+        dependent_task_list=prop_task_list,
+        target_path_list=[proportion_sum_raster_path],
+        task_name='calc proportion sum')
 
     task_graph.join()
     task_graph.close()
     del task_graph
-
-    proportion_sum_raster_path = os.path.join(CHURN_DIR, 'prop_sum.tif')
-    pygeoprocessing.raster_calculator(
-        [(PROP_NODATA, 'raw'), *proportion_raster_band_path_list],
-        sum_rasters_op, proportion_sum_raster_path, gdal.GDT_Float64,
-        PROP_NODATA)
-
     return
 
     LOGGER.debug(raster_path_band_list)
