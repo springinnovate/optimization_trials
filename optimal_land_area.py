@@ -171,12 +171,14 @@ def sum_rasters_op(nodata, *array_list):
     return result
 
 
-def copy_gs(gs_uri, target_dir, token_file):
+def copy_gs(gs_uri, target_dir, token_file_path):
     """Copy uri dir to target and touch a token_file."""
     LOGGER.debug(' to copy %s to %s', gs_uri, target_dir)
     subprocess.run(
         f'gsutil cp -r "{gs_uri}/*" "{target_dir}"',
         shell=True, check=True)
+    with open(token_file_path, 'w') as token_file:
+        token_file.write("done")
 
 
 def main():
