@@ -1,3 +1,6 @@
+# Build instructions:
+# docker build . -f Dockerfile -t ot:tag
+# docker run -it --rm -v `cwd`:/usr/local/workspace ot:tag
 FROM python:3.8-slim-buster as builder
 
 RUN apt-get update
