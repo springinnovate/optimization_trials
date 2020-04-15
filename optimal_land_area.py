@@ -19,6 +19,7 @@ import glob
 import logging
 import os
 import math
+import subprocess
 import sys
 import tempfile
 
@@ -97,129 +98,6 @@ def make_neighborhood_hat_kernel(kernel_size, kernel_filepath):
     kernel_raster = None
 
 
-def make_exponential_decay_kernel_raster(expected_distance, kernel_filepath):
-    """Create a raster-based exponential decay kernel.
-
-    The raster created will be a tiled GeoTiff, with 256x256 memory blocks.
-
-    Args:
-        expected_distance (int or float): The distance (in pixels) of the
-            kernel's radius, the distance at which the value of the decay
-            function is equal to `1/e`.
-        kernel_filepath (string): The path to the file on disk where this
-            kernel should be stored.  If this file exists, it will be
-            overwritten.
-
-    Returns:
-        None
-    """
-    max_distance = expected_distance * 5
-    kernel_size = int(numpy.round(max_distance * 2 + 1))
-
-    driver = gdal.GetDriverByName('GTiff')
-    kernel_dataset = driver.Create(
-        kernel_filepath.encode('utf-8'), kernel_size, kernel_size, 1,
-        gdal.GDT_Float32, options=[
-            'BIGTIFF=IF_SAFER', 'TILED=YES', 'BLOCKXSIZE=256',
-            'BLOCKYSIZE=256'])
-
-    # Make some kind of geotransform, it doesn't matter what but
-    # will make GIS libraries behave better if it's all defined
-    kernel_dataset.SetGeoTransform([0, 1, 0, 0, 0, -1])
-    srs = osr.SpatialReference()
-    srs.SetWellKnownGeogCS('WGS84')
-    kernel_dataset.SetProjection(srs.ExportToWkt())
-
-    kernel_band = kernel_dataset.GetRasterBand(1)
-    kernel_band.SetNoDataValue(-9999)
-
-    cols_per_block, rows_per_block = kernel_band.GetBlockSize()
-
-    n_cols = kernel_dataset.RasterXSize
-    n_rows = kernel_dataset.RasterYSize
-
-    n_col_blocks = int(math.ceil(n_cols / float(cols_per_block)))
-    n_row_blocks = int(math.ceil(n_rows / float(rows_per_block)))
-
-    integration = 0.0
-    for row_block_index in range(n_row_blocks):
-        row_offset = row_block_index * rows_per_block
-        row_block_width = n_rows - row_offset
-        if row_block_width > rows_per_block:
-            row_block_width = rows_per_block
-
-        for col_block_index in range(n_col_blocks):
-            col_offset = col_block_index * cols_per_block
-            col_block_width = n_cols - col_offset
-            if col_block_width > cols_per_block:
-                col_block_width = cols_per_block
-
-            # Numpy creates index rasters as ints by default, which sometimes
-            # creates problems on 32-bit builds when we try to add Int32
-            # matrices to float64 matrices.
-            row_indices, col_indices = numpy.indices((row_block_width,
-                                                      col_block_width),
-                                                     dtype=numpy.float)
-
-            row_indices += numpy.float(row_offset - max_distance)
-            col_indices += numpy.float(col_offset - max_distance)
-
-            kernel_index_distances = numpy.hypot(
-                row_indices, col_indices)
-            kernel = numpy.where(
-                kernel_index_distances > max_distance, 0.0,
-                numpy.exp(-kernel_index_distances / expected_distance))
-            integration += numpy.sum(kernel)
-
-            kernel_band.WriteArray(kernel, xoff=col_offset,
-                                   yoff=row_offset)
-
-    # Need to flush the kernel's cache to disk before opening up a new Dataset
-    # object in interblocks()
-    kernel_band.FlushCache()
-    kernel_dataset.FlushCache()
-
-    for block_data in pygeoprocessing.iterblocks(
-            (kernel_filepath, 1), offset_only=True):
-        kernel_block = kernel_band.ReadAsArray(**block_data)
-        kernel_block /= integration
-        kernel_band.WriteArray(kernel_block, xoff=block_data['xoff'],
-                               yoff=block_data['yoff'])
-
-    kernel_band.FlushCache()
-    kernel_dataset.FlushCache()
-    kernel_band = None
-    kernel_dataset = None
-
-
-def clamp_to_integer(array, base_nodata, target_nodata):
-    """Round the values in array to nearest integer."""
-    result = numpy.empty(array.shape, dtype=numpy.uint8)
-    result[:] = target_nodata
-    valid_mask = ~numpy.isclose(array, base_nodata)
-    result[valid_mask] = numpy.round(array[valid_mask]).astype(numpy.uint8)
-    return result
-
-
-def overlap_count_op(*array_nodata_list):
-    """Count valid overlap.
-
-    Args:
-        array_nodata_list (list): a 2*n length list containing n arrays
-            followed by n coresponding nodata values.
-
-    Returns:
-        a count of non-nodata overlaps for each element.
-
-    """
-    result = numpy.zeros(array_nodata_list[0].shape)
-    n = len(array_nodata_list) // 2
-    for array, nodata in zip(array_nodata_list[0:n], array_nodata_list[n::]):
-        valid_mask = ~numpy.isclose(array, nodata)
-        result[valid_mask] += 1
-    return result
-
-
 def smooth_mask(base_mask_path, smooth_radius, target_smooth_mask_path):
     """Fill in gaps in base mask if there are neighbors.
 
@@ -293,6 +171,14 @@ def sum_rasters_op(nodata, *array_list):
     return result
 
 
+def copy_gs(gs_uri, target_dir, token_file):
+    """Copy uri dir to target and touch a token_file."""
+    LOGGER.debug(' to copy %s to %s', gs_uri, target_dir)
+    subprocess.run(
+        f'gsutil cp -r "{gs_uri}/*" "{target_dir}"',
+        shell=True, check=True)
+
+
 def main():
     """Entry point."""
     # convert raster list to just 1-10 integer
@@ -304,107 +190,71 @@ def main():
 
     task_graph = taskgraph.TaskGraph(WORKSPACE_DIR, -1, 5.0)
 
+    bucket_uri = 'gs://critical-natural-capital-ecoshards/realized_service_ecoshards/by_country'
+    token_file = os.path.join(
+        CHURN_DIR, f'{os.path.basename(bucket_uri)}.token')
+    copy_gs_task = task_graph.add_task(
+        func=copy_gs,
+        args=(bucket_uri, CHURN_DIR, token_file),
+        target_path_list=[token_file])
+    copy_gs_task.join()
+
+    country_vector = gdal.OpenEx(
+        glob.glob(os.path.join(CHURN_DIR, 'countries*.gpkg'))[0],
+        gdal.OF_VECTOR)
+    country_layer = country_vector.GetLayer()
+    for country_iso in ['IND']:
+        country_layer.ResetReading()
+        country_layer.SetAttributeFilter(f"iso3='{country_iso}'")
+        country_feature = next(iter(country_layer))
+        LOGGER.debug(country_feature.GetField('iso3'))
+
     raster_path_list = [
         path for path in
-        glob.glob(os.path.join(BASE_DATA_DIR, '*.tif'))
+        glob.glob(os.path.join(CHURN_DIR, '*.tif'))
         if 'nodata0' in path]
-    clipped_raster_path_list = [
-        os.path.join(CLIPPED_DIR, os.path.basename(path))
-        for path in raster_path_list]
-    target_pixel_length = min([
-        pygeoprocessing.get_raster_info(path)['pixel_size'][0]
-        for path in raster_path_list])
-    align_task = task_graph.add_task(
-        func=pygeoprocessing.align_and_resize_raster_stack,
-        args=(
-            raster_path_list, clipped_raster_path_list,
-            ['bilinear'] * len(clipped_raster_path_list),
-            [target_pixel_length, -target_pixel_length],
-            # 'intersection'),
-            [-124, 41, -121, 39]),
-        hash_target_files=False,
-        target_path_list=clipped_raster_path_list,
-        task_name='clip align task')
+    for n_services in range(1, len(raster_path_list)+1):
+        clipped_raster_path_list = [
+            os.path.join(CLIPPED_DIR, os.path.basename(path))
+            for path in raster_path_list[0:n_services]]
+        target_pixel_length = min([
+            pygeoprocessing.get_raster_info(path)['pixel_size'][0]
+            for path in raster_path_list])
+        align_task = task_graph.add_task(
+            func=pygeoprocessing.align_and_resize_raster_stack,
+            args=(
+                raster_path_list[0:n_services], clipped_raster_path_list,
+                ['bilinear'] * len(clipped_raster_path_list),
+                [target_pixel_length, -target_pixel_length],
+                # 'intersection'),
+                [-124, 41, -121, 39]),
+            hash_target_files=False,
+            target_path_list=clipped_raster_path_list,
+            task_name='clip align task')
 
-    # overlap_raster_count_path = os.path.join(CHURN_DIR, 'overlap_count.tif')
-    # task_graph.add_task(
-    #     func=pygeoprocessing.raster_calculator,
-    #     args=(
-    #         raster_path_band_list + raster_nodata_list, overlap_count_op,
-    #         overlap_raster_count_path, gdal.GDT_Byte, 0),
-    #     target_path_list=[overlap_raster_count_path],
-    #     task_name='count valid overlaps')
+        target_sum_list = []
+        sum_task_list = []
+        for raster_path in clipped_raster_path_list:
+            sum_task_list.append(
+                task_graph.add_task(
+                    func=sum_raster,
+                    args=((raster_path, 1),),
+                    dependent_task_list=[align_task],
+                    task_name='sum %s' % str(raster_path)))
 
-    # sum_task_list = []
-    # align_task.join()
-    # for raster_path in clipped_raster_path_list:
-    #     sum_task = task_graph.add_task(
-    #         func=sum_raster,
-    #         args=((raster_path, 1),),
-    #         dependent_task_list=[align_task],
-    #         task_name='sum %s' % str(raster_path))
-    #     sum_task_list.append(sum_task)
-
-    # sum_list = [sum_task.get() for sum_task in sum_task_list]
-
-    # target_sum_list = []
-    # raster_path_band_list = []
-    # raster_nodata_list = []
-    # proportion_raster_band_path_list = []
-    # prop_task_list = []
-    # for path, sum_val in zip(clipped_raster_path_list, sum_list):
-    #     if sum_val > 0:
-    #         target_sum_list.append(0.5 * sum_val)
-    #         raster_path_band_list.append((path, 1))
-    #         raster_nodata_list.append(
-    #             (pygeoprocessing.get_raster_info(path)['nodata'][0], 'raw'))
-    #         proportional_path = os.path.join(
-    #             PROPORTIONAL_DIR, f'prop_{os.path.basename(path)}')
-    #         prop_task = task_graph.add_task(
-    #             func=pygeoprocessing.raster_calculator,
-    #             args=([
-    #                 (path, 1), (sum_val, 'raw'),
-    #                 (pygeoprocessing.get_raster_info(path)['nodata'][0],
-    #                  'raw'),
-    #                 (PROP_NODATA, 'raw')], proportion_op, proportional_path,
-    #                 gdal.GDT_Float64, PROP_NODATA),
-    #             target_path_list=[proportional_path],
-    #             task_name=f'calculate proportion for {proportional_path}')
-    #         proportion_raster_band_path_list.append((proportional_path, 1))
-    #         prop_task_list.append(prop_task)
-
-    # proportion_sum_raster_path = os.path.join(CHURN_DIR, 'prop_sum.tif')
-    # task_graph.add_task(
-    #     func=pygeoprocessing.raster_calculator,
-    #     args=(
-    #         [(PROP_NODATA, 'raw'), *proportion_raster_band_path_list],
-    #         sum_rasters_op, proportion_sum_raster_path, gdal.GDT_Float64,
-    #         PROP_NODATA),
-    #     dependent_task_list=prop_task_list,
-    #     target_path_list=[proportion_sum_raster_path],
-    #     task_name='calc proportion sum')
-
-    target_sum_list = []
-    sum_task_list = []
-    for raster_path in clipped_raster_path_list:
-        sum_task_list.append(
-            task_graph.add_task(
-                func=sum_raster,
-                args=((raster_path, 1),),
-                dependent_task_list=[align_task],
-                task_name='sum %s' % str(raster_path)))
-
-    target_sum_list = [0.5 * sum_task.get() for sum_task in sum_task_list]
-
+        target_sum_list = [0.9 * sum_task.get() for sum_task in sum_task_list]
+        if sum(target_sum_list) == 0:
+            continue
+        target_suffix = 'experimental_%d' % (n_services)
+        print(target_suffix)
+        logging.getLogger('pygeoprocessing').setLevel(logging.WARNING)
+        pygeoprocessing.raster_optimization(
+            [(x, 1) for x in clipped_raster_path_list], target_sum_list,
+            OUTPUT_DIR, target_suffix=f'{target_suffix}',
+            preconditioner_weight=0.0)
     task_graph.join()
     task_graph.close()
     del task_graph
-
-    target_suffix = 'experimental'
-    pygeoprocessing.raster_optimization(
-        [(x, 1) for x in clipped_raster_path_list], target_sum_list,
-        OUTPUT_DIR, target_suffix=target_suffix)
-
     return
 
     # target
@@ -416,36 +266,6 @@ def main():
 
     smooth_radius = 3
     smooth_mask(optimal_raw_mask_path, smooth_radius, smoothed_mask_path)
-
-
-def polygonize(base_raster_path_band, target_vector_path):
-    """Polygonize base to target.
-
-    Args:
-        base_raster_path_band (str): path to base raster file.
-        target_vector_path (str): path to vector that will be created making
-            polygons over similar/connected regions.
-
-    Returns:
-        None.
-
-    """
-    raster = gdal.OpenEx(base_raster_path_band[0], gdal.OF_RASTER)
-    band = raster.GetRasterBand(base_raster_path_band[1])
-
-    spatial_ref = osr.SpatialReference()
-    spatial_ref.ImportFromWkt(raster.GetProjection())
-
-    driver = ogr.GetDriverByName('GPKG')
-    poly_vector = driver.CreateDataSource(target_vector_path)
-
-    poly_layer = poly_vector.CreateLayer(
-        os.path.splitext(os.path.basename(target_vector_path))[0], spatial_ref,
-        ogr.wkbPolygon)
-    poly_layer.CreateField(ogr.FieldDefn('value', ogr.OFTInteger))
-    gdal.Polygonize(
-        band, None, poly_layer, 0, ['CONNECTED8'],
-        callback=gdal.TermProgress_nocb)
 
 
 if __name__ == '__main__':
