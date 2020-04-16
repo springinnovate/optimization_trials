@@ -39,6 +39,14 @@ CHURN_DIR = os.path.join(WORKSPACE_DIR, 'churn')
 CLIPPED_DIR = os.path.join(CHURN_DIR, 'clipped')
 COUNTRY_WORKSPACES = os.path.join(CHURN_DIR, 'country_workspaces')
 OUTPUT_DIR = os.path.join(WORKSPACE_DIR, 'output')
+RASTER_SUBSET_LIST = [
+    'realized_coastalprotection',
+    'realized_natureaccess10_nathab',
+    'realized_nitrogenretention_nathab_clamped',
+    'realized_pollination_nathab_clamped',
+    'realized_sedimentdeposition_nathab_clamped',
+]
+
 TARGET_NODATA = -1
 PROP_NODATA = -1
 logging.basicConfig(
@@ -249,7 +257,9 @@ def main():
         os.path.join(CHURN_DIR, 'countries*.gpkg'))[0]
 
     base_raster_path_list = [
-        path for path in glob.glob(os.path.join(CHURN_DIR, '*.tif'))]
+        path for path in glob.glob(os.path.join(CHURN_DIR, '*.tif'))
+        if any(x in path for x in RASTER_SUBSET_LIST)]
+
     clipped_pixel_length = min([
         pygeoprocessing.get_raster_info(path)['pixel_size'][0]
         for path in base_raster_path_list])
@@ -276,7 +286,6 @@ def main():
                 country_working_dir, os.path.basename(raster_path))
             for raster_path in base_raster_path_list]
 
-        LOGGER.debug(f'aligning rasters for {country_iso}')
         align_task = task_graph.add_task(
             func=pygeoprocessing.align_and_resize_raster_stack,
             args=(
