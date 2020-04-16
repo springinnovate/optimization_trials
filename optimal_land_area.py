@@ -183,6 +183,47 @@ def copy_gs(gs_uri, target_dir, token_file_path):
         token_file.write("done")
 
 
+def extract_feature(
+        base_vector_path, base_fieldname, base_fieldname_value,
+        target_vector_path):
+    """Extract a feature from base into a new vector.
+
+    Args:
+        base_vector_path (str): path to a multipolygon vector
+        base_fieldname (str): name of fieldname to filter on
+        base_fieldname_value (str): value of fieldname to filter on
+        target_vector_path (str): path to target vector.
+
+    Returns:
+        None.
+
+    """
+    try:
+        os.makedirs(os.path.dirname(target_vector_path))
+    except OSError:
+        pass
+    vector = gdal.OpenEx(base_vector_path, gdal.OF_VECTOR)
+    layer = vector.GetLayer()
+    layer.SetAttributeFilter(f"{base_fieldname}='{base_fieldname_value}'")
+    country_feature = next(iter(layer))
+    country_geometry = country_feature.GetGeometryRef()
+    gpkg_driver = ogr.GetDriverByName('GPKG')
+
+    local_country_vector = gpkg_driver.CreateDataSource(target_vector_path)
+    # create the layer
+    local_layer = local_country_vector.CreateLayer(
+        os.path.basename(os.path.splitext(base_fieldname_value)[0]),
+        layer.GetSpatialRef(), ogr.wkbMultiPolygon)
+    layer_defn = local_layer.GetLayerDefn()
+    new_feature = ogr.Feature(layer_defn)
+    new_feature.SetGeometry(country_geometry.Clone())
+    country_geometry = None
+    local_layer.CreateFeature(new_feature)
+    new_feature = None
+    local_layer = None
+    local_country_vector = None
+
+
 def main():
     """Entry point."""
     # convert raster list to just 1-10 integer
@@ -203,10 +244,15 @@ def main():
         target_path_list=[token_file])
     copy_gs_task.join()
 
-    country_vector = gdal.OpenEx(
+    global_vector_path = gdal.OpenEx(
         glob.glob(os.path.join(CHURN_DIR, 'countries*.gpkg'))[0],
         gdal.OF_VECTOR)
-    country_layer = country_vector.GetLayer()
+
+    base_raster_path_list = [
+        path for path in glob.glob(os.path.join(CHURN_DIR, '*.tif'))]
+    clipped_pixel_length = min([
+        pygeoprocessing.get_raster_info(path)['pixel_size'][0]
+        for path in base_raster_path_list])
 
     for country_iso in ['IND']:
         country_working_dir = os.path.join(COUNTRY_WORKSPACES, country_iso)
@@ -214,55 +260,29 @@ def main():
             os.makedirs(country_working_dir)
         except OSError:
             pass
-        country_layer.ResetReading()
-        country_layer.SetAttributeFilter(f"iso3='{country_iso}'")
-        country_feature = next(iter(country_layer))
-        LOGGER.debug(country_feature.GetField('iso3'))
-        country_geometry = country_feature.GetGeometryRef()
 
         local_country_vector_path = os.path.join(
             country_working_dir, f'{country_iso}.gpkg')
-        gpkg_driver = ogr.GetDriverByName('GPKG')
+        extract_task = task_graph.add_task(
+            func=extract_feature,
+            args=(global_vector_path, 'iso3', country_iso,
+                  local_country_vector_path),
+            hash_target_files=False,
+            target_path_list=[local_country_vector_path],
+            task_name=f'extract {country_iso}')
 
-        LOGGER.debug('create vector')
-        local_country_vector = gpkg_driver.CreateDataSource(
-            local_country_vector_path)
-        # create the layer
-        LOGGER.debug('create layer')
-        local_layer = local_country_vector.CreateLayer(
-            country_iso, country_layer.GetSpatialRef(),
-            ogr.wkbMultiPolygon)
-        LOGGER.debug('get layer defn')
-        layer_defn = local_layer.GetLayerDefn()
-        LOGGER.debug('build feature')
-        new_feature = ogr.Feature(layer_defn)
-        LOGGER.debug('set geometry')
-        new_feature.SetGeometry(country_geometry.Clone())
-        country_geometry = None
-        LOGGER.debug('create feature')
-        local_layer.CreateFeature(new_feature)
-        new_feature = None
-        local_layer = None
-        local_country_vector = None
-
-        raster_path_list = [
-            path for path in glob.glob(os.path.join(CHURN_DIR, '*.tif'))]
         clipped_raster_path_list = [
             os.path.join(
                 country_working_dir, os.path.basename(raster_path))
-            for raster_path in raster_path_list]
-
-        target_pixel_length = min([
-            pygeoprocessing.get_raster_info(path)['pixel_size'][0]
-            for path in raster_path_list])
+            for raster_path in base_raster_path_list]
 
         LOGGER.debug(f'aligning rasters for {country_iso}')
         align_task = task_graph.add_task(
             func=pygeoprocessing.align_and_resize_raster_stack,
             args=(
-                raster_path_list, clipped_raster_path_list,
+                base_raster_path_list, clipped_raster_path_list,
                 ['near'] * len(clipped_raster_path_list),
-                [target_pixel_length, -target_pixel_length],
+                [clipped_pixel_length, -clipped_pixel_length],
                 'intersection',
                 ),
             kwargs={
@@ -271,29 +291,34 @@ def main():
                     'mask_vector_path': local_country_vector_path,
                 }
             },
+            dependent_task_list=[extract_task],
             ignore_path_list=[local_country_vector_path],
             target_path_list=clipped_raster_path_list,
             task_name=f'clip align task for {country_iso}')
 
         target_suffix = country_iso
-        logging.getLogger('pygeoprocessing').setLevel(logging.WARNING)
-        pygeoprocessing.raster_optimization(
-            [(x, 1) for x in clipped_raster_path_list], OUTPUT_DIR,
-            target_suffix=target_suffix)
+        logging.getLogger('pygeoprocessing').setLevel(logging.DEBUG)
+        task_graph.add_task(
+            func=pygeoprocessing.raster_optimization,
+            args=(
+                [(x, 1) for x in clipped_raster_path_list], OUTPUT_DIR),
+            kwargs={'target_suffix': target_suffix},
+            dependent_task_list=[align_task],
+            task_name=f'optimize {country_iso}')
+
     task_graph.join()
     task_graph.close()
-    del task_graph
     return
 
-    # target
-    optimal_raw_mask_path = os.path.join(
-        OUTPUT_DIR, f'optimal_mask_{target_suffix}.tif')
+    # TODO: these show how to smooth the final raster val if desired
+    # optimal_raw_mask_path = os.path.join(
+    #     OUTPUT_DIR, f'optimal_mask_{target_suffix}.tif')
 
-    smoothed_mask_path = os.path.join(
-        OUTPUT_DIR, f'smoothed_mask_{target_suffix}.tif')
+    # smoothed_mask_path = os.path.join(
+    #     OUTPUT_DIR, f'smoothed_mask_{target_suffix}.tif')
 
-    smooth_radius = 3
-    smooth_mask(optimal_raw_mask_path, smooth_radius, smoothed_mask_path)
+    # smooth_radius = 3
+    # smooth_mask(optimal_raw_mask_path, smooth_radius, smoothed_mask_path)
 
 
 if __name__ == '__main__':

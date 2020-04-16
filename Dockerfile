@@ -120,7 +120,6 @@ RUN tar -xzf gdal-${GDAL_VERSION}.tar.gz && cd gdal-${GDAL_VERSION} && \
         --with-geotiff=internal \
         --with-hide-internal-symbols=yes \
         --with-libtiff=internal \
-        --with-python \
         --with-openjpeg \
         --with-sqlite3 \
         --with-spatialite \
@@ -140,6 +139,7 @@ RUN apt install libspatialindex-dev -y
 
 RUN pip3 install --no-cache-dir \
     Cython \
+    gdal==${GDAL_VERSION} \
     flask \
     matplotlib \
     numpy \
@@ -147,8 +147,7 @@ RUN pip3 install --no-cache-dir \
     retrying \
     rtree \
     scipy \
-    shapely \
-    git+https://github.com/natcap/pygeoprocessing.git@release/2.0
+    shapely
 
 RUN apt install -y \
     openssl \
@@ -160,8 +159,6 @@ RUN ./google-cloud-sdk/install.sh
 RUN source /usr/local/gcloud-sdk/google-cloud-sdk/completion.bash.inc
 RUN source /usr/local/gcloud-sdk/google-cloud-sdk/path.bash.inc
 RUN echo "export PATH=$PATH:/usr/local/gcloud-sdk/google-cloud-sdk/bin" >> /root/.bashrc
-
-RUN pip3 install ecoshard==0.4.0
 
 WORKDIR /usr/local/workspace
 ENTRYPOINT ["bash"]
