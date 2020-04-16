@@ -244,9 +244,9 @@ def main():
         target_path_list=[token_file])
     copy_gs_task.join()
 
-    global_vector_path = gdal.OpenEx(
-        glob.glob(os.path.join(CHURN_DIR, 'countries*.gpkg'))[0],
-        gdal.OF_VECTOR)
+    # we know there's a "countries" .gpkg in there
+    global_vector_path = glob.glob(
+        os.path.join(CHURN_DIR, 'countries*.gpkg'))[0],
 
     base_raster_path_list = [
         path for path in glob.glob(os.path.join(CHURN_DIR, '*.tif'))]
