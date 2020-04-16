@@ -16,9 +16,9 @@ Here's the plan:
 
 """
 import glob
+import hashlib
 import logging
 import os
-import math
 import subprocess
 import sys
 import tempfile
@@ -37,6 +37,7 @@ BASE_DATA_DIR = 'data'
 WORKSPACE_DIR = 'workspace_dir'
 CHURN_DIR = os.path.join(WORKSPACE_DIR, 'churn')
 CLIPPED_DIR = os.path.join(CHURN_DIR, 'clipped')
+DOWNLOAD_DIR = os.path.join(CHURN_DIR, 'downloads')
 COUNTRY_WORKSPACES = os.path.join(CHURN_DIR, 'country_workspaces')
 OUTPUT_DIR = os.path.join(WORKSPACE_DIR, 'output')
 RASTER_SUBSET_LIST = [
@@ -184,6 +185,10 @@ def sum_rasters_op(nodata, *array_list):
 def copy_gs(gs_uri, target_dir, token_file_path):
     """Copy uri dir to target and touch a token_file."""
     LOGGER.debug(' to copy %s to %s', gs_uri, target_dir)
+    try:
+        os.makedirs(target_dir)
+    except OSError:
+        pass
     subprocess.run(
         f'gsutil cp -r "{gs_uri}/*" "{target_dir}"',
         shell=True, check=True)
@@ -241,23 +246,28 @@ def main():
         except OSError:
             pass
 
-    task_graph = taskgraph.TaskGraph(WORKSPACE_DIR, -1, 5.0)
-
-    bucket_uri = 'gs://critical-natural-capital-ecoshards/realized_service_ecoshards/by_country'
+    bucket_uri = (
+        'gs://critical-natural-capital-ecoshards/realized_service_ecoshards/'
+        'by_country')
+    m = hashlib.md5()
+    m.update(bucket_uri)
+    local_churn_dir = os.path.join(CHURN_DIR, m.hexdigest())
+    local_download_dir = os.path.join(local_churn_dir, 'downloads')
     token_file = os.path.join(
-        CHURN_DIR, f'{os.path.basename(bucket_uri)}.token')
+        local_download_dir, f'{os.path.basename(bucket_uri)}.token')
+    task_graph = taskgraph.TaskGraph(local_churn_dir, -1, 5.0)
     copy_gs_task = task_graph.add_task(
         func=copy_gs,
-        args=(bucket_uri, CHURN_DIR, token_file),
+        args=(bucket_uri, local_download_dir, token_file),
         target_path_list=[token_file])
     copy_gs_task.join()
 
     # we know there's a "countries" .gpkg in there
     global_vector_path = glob.glob(
-        os.path.join(CHURN_DIR, 'countries*.gpkg'))[0]
+        os.path.join(local_download_dir, 'countries*.gpkg'))[0]
 
     base_raster_path_list = [
-        path for path in glob.glob(os.path.join(CHURN_DIR, '*.tif'))
+        path for path in glob.glob(os.path.join(local_download_dir, '*.tif'))
         if any(x in path for x in RASTER_SUBSET_LIST)]
 
     clipped_pixel_length = min([
@@ -265,7 +275,8 @@ def main():
         for path in base_raster_path_list])
 
     for country_iso in ['IND']:
-        country_working_dir = os.path.join(COUNTRY_WORKSPACES, country_iso)
+        country_working_dir = os.path.join(
+            local_churn_dir, 'country_workspaces', country_iso)
         try:
             os.makedirs(country_working_dir)
         except OSError:
@@ -283,7 +294,7 @@ def main():
 
         clipped_raster_path_list = [
             os.path.join(
-                country_working_dir, os.path.basename(raster_path))
+                country_working_dir, 'clipped', os.path.basename(raster_path))
             for raster_path in base_raster_path_list]
 
         align_task = task_graph.add_task(
@@ -292,7 +303,8 @@ def main():
                 base_raster_path_list, clipped_raster_path_list,
                 ['near'] * len(clipped_raster_path_list),
                 [clipped_pixel_length, -clipped_pixel_length],
-                'intersection',
+                # 'intersection',
+                [80, 20, 81, 21], # area in mid india
                 ),
             kwargs={
                 'base_vector_path_list': [local_country_vector_path],
@@ -307,10 +319,12 @@ def main():
 
         target_suffix = country_iso
         logging.getLogger('pygeoprocessing').setLevel(logging.DEBUG)
+        local_output_dir = os.path.join(local_churn_dir, 'output')
         task_graph.add_task(
             func=pygeoprocessing.raster_optimization,
             args=(
-                [(x, 1) for x in clipped_raster_path_list], OUTPUT_DIR),
+                [(x, 1) for x in clipped_raster_path_list],
+                local_churn_dir, local_output_dir),
             kwargs={'target_suffix': target_suffix},
             dependent_task_list=[align_task],
             task_name=f'optimize {country_iso}')
