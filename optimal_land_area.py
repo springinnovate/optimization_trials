@@ -246,7 +246,7 @@ def main():
 
     # we know there's a "countries" .gpkg in there
     global_vector_path = glob.glob(
-        os.path.join(CHURN_DIR, 'countries*.gpkg'))[0],
+        os.path.join(CHURN_DIR, 'countries*.gpkg'))[0]
 
     base_raster_path_list = [
         path for path in glob.glob(os.path.join(CHURN_DIR, '*.tif'))]
