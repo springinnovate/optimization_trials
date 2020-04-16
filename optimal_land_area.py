@@ -324,6 +324,7 @@ def main():
                 country_working_dir, local_output_dir),
             kwargs={'target_suffix': target_suffix},
             dependent_task_list=[align_task],
+            transient_run=True,
             task_name=f'optimize {country_iso}')
 
     task_graph.join()
