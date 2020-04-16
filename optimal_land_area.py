@@ -36,10 +36,6 @@ gdal.SetCacheMax(2**27)
 BASE_DATA_DIR = 'data'
 WORKSPACE_DIR = 'workspace_dir'
 CHURN_DIR = os.path.join(WORKSPACE_DIR, 'churn')
-CLIPPED_DIR = os.path.join(CHURN_DIR, 'clipped')
-DOWNLOAD_DIR = os.path.join(CHURN_DIR, 'downloads')
-COUNTRY_WORKSPACES = os.path.join(CHURN_DIR, 'country_workspaces')
-OUTPUT_DIR = os.path.join(WORKSPACE_DIR, 'output')
 RASTER_SUBSET_LIST = [
     'realized_coastalprotection',
     'realized_natureaccess10_nathab',
@@ -240,7 +236,7 @@ def extract_feature(
 def main():
     """Entry point."""
     # convert raster list to just 1-10 integer
-    for dir_path in [WORKSPACE_DIR, CHURN_DIR, CLIPPED_DIR, OUTPUT_DIR]:
+    for dir_path in [WORKSPACE_DIR, CHURN_DIR]:
         try:
             os.makedirs(dir_path)
         except OSError:
@@ -319,12 +315,13 @@ def main():
 
         target_suffix = country_iso
         logging.getLogger('pygeoprocessing').setLevel(logging.DEBUG)
-        local_output_dir = os.path.join(local_churn_dir, 'output')
+        local_output_dir = os.path.join(
+            local_churn_dir, 'output', country_iso)
         task_graph.add_task(
             func=pygeoprocessing.raster_optimization,
             args=(
                 [(x, 1) for x in clipped_raster_path_list],
-                local_churn_dir, local_output_dir),
+                country_working_dir, local_output_dir),
             kwargs={'target_suffix': target_suffix},
             dependent_task_list=[align_task],
             task_name=f'optimize {country_iso}')
