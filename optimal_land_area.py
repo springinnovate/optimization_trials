@@ -222,16 +222,24 @@ def main():
             country_working_dir, f'{country_iso}.gpkg')
         gpkg_driver = ogr.GetDriverByName('GPKG')
 
+        LOGGER.debug('create vector')
         local_country_vector = gpkg_driver.CreateDataSource(
             local_country_vector_path)
         # create the layer
+        LOGGER.debug('create layer')
         local_layer = local_country_vector.CreateLayer(
             country_iso, country_layer.GetSpatialRef(),
-            ogr.wkbPolygon)
+            ogr.wkbMultiPolygon)
+        LOGGER.debug('get layer defn')
         layer_defn = local_layer.GetLayerDefn()
-        country_feature = ogr.Feature(layer_defn)
-        country_feature.SetGeometry(country_geometry.Clone())
-        local_layer.CreateFeature(country_feature)
+        LOGGER.debug('build feature')
+        new_feature = ogr.Feature(layer_defn)
+        LOGGER.debug('set geometry')
+        new_feature.SetGeometry(country_geometry.Clone())
+        country_geometry = None
+        LOGGER.debug('create feature')
+        local_layer.CreateFeature(new_feature)
+        new_feature = None
         local_layer = None
         local_country_vector = None
 
@@ -246,12 +254,14 @@ def main():
             pygeoprocessing.get_raster_info(path)['pixel_size'][0]
             for path in raster_path_list])
 
+        LOGGER.debug(f'aligning rasters for {country_iso}')
         align_task = task_graph.add_task(
             func=pygeoprocessing.align_and_resize_raster_stack,
             args=(
                 raster_path_list, clipped_raster_path_list,
-                ['nearest'] * len(clipped_raster_path_list),
+                ['near'] * len(clipped_raster_path_list),
                 [target_pixel_length, -target_pixel_length],
+                'intersection',
                 ),
             kwargs={
                 'base_vector_path_list': [local_country_vector_path],
