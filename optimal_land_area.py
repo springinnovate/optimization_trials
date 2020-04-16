@@ -324,6 +324,8 @@ def main():
                 country_working_dir, local_output_dir),
             kwargs={'target_suffix': target_suffix},
             dependent_task_list=[align_task],
+            target_path_list=[os.path.join(
+                local_output_dir, f'results_{target_suffix}.csv')],
             transient_run=True,
             task_name=f'optimize {country_iso}')
 
