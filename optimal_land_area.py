@@ -226,7 +226,7 @@ def main():
             local_country_vector_path)
         # create the layer
         local_layer = local_country_vector.CreateLayer(
-            country_iso, country_layer.GetSpatialRef().ExportToWkt(),
+            country_iso, country_layer.GetSpatialRef(),
             ogr.wkbPolygon)
         layer_defn = local_layer.GetLayerDefn()
         country_feature = ogr.Feature(layer_defn)
