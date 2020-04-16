@@ -161,21 +161,6 @@ RUN source /usr/local/gcloud-sdk/google-cloud-sdk/completion.bash.inc
 RUN source /usr/local/gcloud-sdk/google-cloud-sdk/path.bash.inc
 RUN echo "export PATH=$PATH:/usr/local/gcloud-sdk/google-cloud-sdk/bin" >> /root/.bashrc
 
-COPY salo-api-5de978810708.json /usr/local/salo-api-5de978810708.json
-RUN /usr/local/gcloud-sdk/google-cloud-sdk/bin/gcloud auth activate-service-account --key-file=/usr/local/salo-api-5de978810708.json
-RUN /usr/local/gcloud-sdk/google-cloud-sdk/bin/gcloud config set project natgeo-dams
-RUN rm /usr/local/salo-api-5de978810708.json
-
-WORKDIR /usr/local
-COPY geoserver-2.16.2-bin.zip .
-RUN unzip geoserver-2.16.2-bin.zip
-RUN rm geoserver-2.16.2-bin.zip
-RUN mv ./geoserver-2.16.2 ./geoserver
-
-COPY start_geoserver.sh /usr/local/geoserver/bin
-COPY geoserver_flask_manager.py /usr/local/geoserver/bin
-COPY geoserver_tracer.py /usr/local/geoserver/bin
-
 RUN pip3 install ecoshard==0.4.0
 
 WORKDIR /usr/local/workspace
