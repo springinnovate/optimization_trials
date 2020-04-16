@@ -35,8 +35,8 @@ BASE_DATA_DIR = 'data'
 WORKSPACE_DIR = 'workspace_dir'
 CHURN_DIR = os.path.join(WORKSPACE_DIR, 'churn')
 CLIPPED_DIR = os.path.join(CHURN_DIR, 'clipped')
+COUNTRY_WORKSPACES = os.path.join(CHURN_DIR, 'country_workspaces')
 OUTPUT_DIR = os.path.join(WORKSPACE_DIR, 'output')
-PROPORTIONAL_DIR = os.path.join(WORKSPACE_DIR, 'proportional_rasters')
 TARGET_NODATA = -1
 PROP_NODATA = -1
 logging.basicConfig(
@@ -205,55 +205,68 @@ def main():
         glob.glob(os.path.join(CHURN_DIR, 'countries*.gpkg'))[0],
         gdal.OF_VECTOR)
     country_layer = country_vector.GetLayer()
+
     for country_iso in ['IND']:
+        country_working_dir = os.path.join(COUNTRY_WORKSPACES, country_iso)
+        try:
+            os.makedirs(country_working_dir)
+        except OSError:
+            pass
         country_layer.ResetReading()
         country_layer.SetAttributeFilter(f"iso3='{country_iso}'")
         country_feature = next(iter(country_layer))
         LOGGER.debug(country_feature.GetField('iso3'))
+        country_geometry = country_feature.GetGeometryRef()
 
-    raster_path_list = [
-        path for path in
-        glob.glob(os.path.join(CHURN_DIR, '*.tif'))
-        if 'nodata0' in path]
-    for n_services in range(1, len(raster_path_list)+1):
+        local_country_vector_path = os.path.join(
+            country_working_dir, f'{country_iso}.gpkg')
+        gpkg_driver = ogr.GetDriverByName('GPKG')
+
+        local_country_vector = gpkg_driver.CreateDataSource(
+            local_country_vector_path)
+        # create the layer
+        local_layer = local_country_vector.CreateLayer(
+            country_iso, country_layer.GetSpatialRef().ExportToWkt(),
+            ogr.wkbPolygon)
+        layer_defn = local_layer.GetLayerDefn()
+        country_feature = ogr.Feature(layer_defn)
+        country_feature.SetGeometry(country_geometry.Clone())
+        local_layer.CreateFeature(country_feature)
+        local_layer = None
+        local_country_vector = None
+
+        raster_path_list = [
+            path for path in glob.glob(os.path.join(CHURN_DIR, '*.tif'))]
         clipped_raster_path_list = [
-            os.path.join(CLIPPED_DIR, os.path.basename(path))
-            for path in raster_path_list[0:n_services]]
+            os.path.join(
+                country_working_dir, os.path.basename(raster_path))
+            for raster_path in raster_path_list]
+
         target_pixel_length = min([
             pygeoprocessing.get_raster_info(path)['pixel_size'][0]
             for path in raster_path_list])
+
         align_task = task_graph.add_task(
             func=pygeoprocessing.align_and_resize_raster_stack,
             args=(
-                raster_path_list[0:n_services], clipped_raster_path_list,
-                ['bilinear'] * len(clipped_raster_path_list),
+                raster_path_list, clipped_raster_path_list,
+                ['nearest'] * len(clipped_raster_path_list),
                 [target_pixel_length, -target_pixel_length],
-                # 'intersection'),
-                [-124, 41, -121, 39]),
-            hash_target_files=False,
+                ),
+            kwargs={
+                'base_vector_path_list': [local_country_vector_path],
+                'vector_mask_options': {
+                    'mask_vector_path': local_country_vector_path,
+                }
+            },
             target_path_list=clipped_raster_path_list,
-            task_name='clip align task')
+            task_name=f'clip align task for {country_iso}')
 
-        target_sum_list = []
-        sum_task_list = []
-        for raster_path in clipped_raster_path_list:
-            sum_task_list.append(
-                task_graph.add_task(
-                    func=sum_raster,
-                    args=((raster_path, 1),),
-                    dependent_task_list=[align_task],
-                    task_name='sum %s' % str(raster_path)))
-
-        target_sum_list = [0.9 * sum_task.get() for sum_task in sum_task_list]
-        if sum(target_sum_list) == 0:
-            continue
-        target_suffix = 'experimental_%d' % (n_services)
-        print(target_suffix)
+        target_suffix = country_iso
         logging.getLogger('pygeoprocessing').setLevel(logging.WARNING)
         pygeoprocessing.raster_optimization(
-            [(x, 1) for x in clipped_raster_path_list], target_sum_list,
-            OUTPUT_DIR, target_suffix=f'{target_suffix}',
-            preconditioner_weight=0.0)
+            [(x, 1) for x in clipped_raster_path_list], OUTPUT_DIR,
+            target_suffix=target_suffix)
     task_graph.join()
     task_graph.close()
     del task_graph
