@@ -299,8 +299,8 @@ def main():
                 base_raster_path_list, clipped_raster_path_list,
                 ['near'] * len(clipped_raster_path_list),
                 [clipped_pixel_length, -clipped_pixel_length],
-                # 'intersection',
-                [80, 20, 81, 21], # area in mid india
+                'intersection',
+                # [80, 20, 81, 21], # area in mid india
                 ),
             kwargs={
                 'base_vector_path_list': [local_country_vector_path],
