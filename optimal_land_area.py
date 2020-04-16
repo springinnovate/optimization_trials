@@ -31,6 +31,8 @@ import pygeoprocessing
 import pygeoprocessing.routing
 import taskgraph
 
+gdal.SetCacheMax(2**27)
+
 BASE_DATA_DIR = 'data'
 WORKSPACE_DIR = 'workspace_dir'
 CHURN_DIR = os.path.join(WORKSPACE_DIR, 'churn')
@@ -269,6 +271,7 @@ def main():
                     'mask_vector_path': local_country_vector_path,
                 }
             },
+            ignore_path_list=[local_country_vector_path],
             target_path_list=clipped_raster_path_list,
             task_name=f'clip align task for {country_iso}')
 
