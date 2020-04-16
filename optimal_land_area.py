@@ -250,7 +250,7 @@ def main():
         'gs://critical-natural-capital-ecoshards/realized_service_ecoshards/'
         'by_country')
     m = hashlib.md5()
-    m.update(bucket_uri)
+    m.update(bucket_uri.encode('utf-8'))
     local_churn_dir = os.path.join(CHURN_DIR, m.hexdigest())
     local_download_dir = os.path.join(local_churn_dir, 'downloads')
     token_file = os.path.join(

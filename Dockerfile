@@ -8,16 +8,11 @@ RUN apt-get install -y --no-install-recommends \
         cmake build-essential wget ca-certificates unzip pkg-config \
         zlib1g-dev libfreexl-dev libxml2-dev
 
-# making directory to avoid this JDK installation bug: https://github.com/geerlingguy/ansible-role-java/issues/64
-RUN mkdir /usr/share/man/man1
-RUN apt-get install -y openjdk-11-jdk-headless
-
 RUN apt-get install -y \
     emacs \
     gcc \
     git \
     libffi-dev \
-    openjdk-11-jdk \
     unzip
 
 WORKDIR /tmp
@@ -44,7 +39,6 @@ RUN wget -q https://curl.haxx.se/download/curl-${CURL_VERSION}.tar.gz
 RUN wget -q -O openjpeg-${OPENJPEG_VERSION}.tar.gz https://github.com/uclouvain/openjpeg/archive/v${OPENJPEG_VERSION}.tar.gz
 RUN wget -q https://download.osgeo.org/gdal/${GDAL_VERSION}/gdal-${GDAL_VERSION}.tar.gz
 RUN wget -q https://www.sqlite.org/2019/sqlite-autoconf-${SQLITE_VERSION}.tar.gz
-#           https://www.sqlite.org/2019/sqlite-autoconf-3270200.tar.gz
 RUN wget -q https://www.gaia-gis.it/gaia-sins/libspatialite-${SPATIALITE_VERSION}.tar.gz
 RUN wget -q https://download.osgeo.org/proj/proj-datumgrid-1.8.zip
 
@@ -137,7 +131,7 @@ RUN ldconfig
 RUN apt update && apt upgrade
 RUN apt install libspatialindex-dev -y
 
-RUN pip3 install --no-cache-dir \
+RUN pip install --no-cache-dir \
     Cython \
     gdal==${GDAL_VERSION} \
     flask \
