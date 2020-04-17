@@ -41,10 +41,11 @@ CHURN_DIR = os.path.join(WORKSPACE_DIR, 'churn')
 # each bucket has a handful of .tifs and a .gpkg, the fieldnam is the fielname
 # to iterate through
 BUCKET_FIELDNAME_LIST = [
+    #('gs://critical-natural-capital-ecoshards/realized_service_ecoshards/'
+    # 'by_country', 'iso3'),
     ('gs://critical-natural-capital-ecoshards/realized_service_ecoshards/'
-     'by_country', 'iso3'),
-    ('gs://critical-natural-capital-ecoshards/realized_service_ecoshards/'
-     'by_eez', 'ISO_SOV1')]
+     'by_eez', 'ISO_SOV1'),
+    ]
 
 ISO_CODES_TO_SKIP = ['ATA']
 
@@ -253,7 +254,7 @@ def main():
             pass
 
     task_graph = taskgraph.TaskGraph(
-        WORKSPACE_DIR, multiprocessing.cpu_count(), 5.0)
+        WORKSPACE_DIR, 0) #multiprocessing.cpu_count(), 5.0)
 
     for bucket_uri, fieldname in BUCKET_FIELDNAME_LIST:
         m = hashlib.md5()
