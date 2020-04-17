@@ -251,7 +251,7 @@ def main():
             pass
 
     task_graph = taskgraph.TaskGraph(
-        WORKSPACE_DIR, 0, 5.0) #multiprocessing.cpu_count(), 5.0)
+        WORKSPACE_DIR, multiprocessing.cpu_count(), 5.0)
 
     for bucket_uri, fieldname in BUCKET_FIELDNAME_LIST:
         m = hashlib.md5()
