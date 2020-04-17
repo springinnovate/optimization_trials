@@ -356,7 +356,7 @@ def main():
     task_graph.join()
     task_graph.close()
     LOGGER.debug('task graph is all done')
-    del task_graph
+    task_graph._terminate()
 
 
 if __name__ == '__main__':
