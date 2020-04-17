@@ -44,6 +44,8 @@ RASTER_SUBSET_LIST = [
     'realized_sedimentdeposition_nathab_clamped',
 ]
 
+ISO_CODES_TO_SKIP = ['ATA']
+
 TARGET_NODATA = -1
 PROP_NODATA = -1
 logging.basicConfig(

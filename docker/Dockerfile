@@ -133,7 +133,6 @@ RUN apt install libspatialindex-dev -y
 
 RUN pip install --no-cache-dir \
     Cython \
-    gdal==${GDAL_VERSION} \
     flask \
     matplotlib \
     numpy \
@@ -153,6 +152,10 @@ RUN ./google-cloud-sdk/install.sh
 RUN source /usr/local/gcloud-sdk/google-cloud-sdk/completion.bash.inc
 RUN source /usr/local/gcloud-sdk/google-cloud-sdk/path.bash.inc
 RUN echo "export PATH=$PATH:/usr/local/gcloud-sdk/google-cloud-sdk/bin" >> /root/.bashrc
+
+RUN pip install \
+    ecoshard \
+    git+https://github.com/richpsharp/pygeoprocessing.git@release/2.0
 
 WORKDIR /usr/local/workspace
 ENTRYPOINT ["bash"]
