@@ -153,9 +153,10 @@ RUN source /usr/local/gcloud-sdk/google-cloud-sdk/completion.bash.inc
 RUN source /usr/local/gcloud-sdk/google-cloud-sdk/path.bash.inc
 RUN echo "export PATH=$PATH:/usr/local/gcloud-sdk/google-cloud-sdk/bin" >> /root/.bashrc
 
-RUN pip install \
-    ecoshard \
-    git+https://github.com/richpsharp/pygeoprocessing.git@feature/raster_optimization
+WORKDIR /usr/local
+RUN git clone https://github.com/richpsharp/pygeoprocessing.git
+WORKDIR /usr/local/pygeoprocessing
+RUN git checkout feature/raster_optimization && python setup.py install
 
 WORKDIR /usr/local/workspace
-ENTRYPOINT ["bash"]
+ENTRYPOINT ["bash -c"]
