@@ -57,7 +57,7 @@ logging.basicConfig(
         '%(asctime)s (%(relativeCreated)d) %(levelname)s %(name)s'
         ' [%(funcName)s:%(lineno)d] %(message)s'))
 LOGGER = logging.getLogger(__name__)
-logging.getLogger('taskgraph').setLevel(logging.INFO)
+logging.getLogger('taskgraph').setLevel(logging.DEBUG)
 
 
 def sum_raster(raster_path_band):
