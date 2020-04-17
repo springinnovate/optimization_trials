@@ -55,8 +55,7 @@ logging.basicConfig(
     level=logging.DEBUG,
     format=(
         '%(asctime)s (%(relativeCreated)d) %(levelname)s %(name)s'
-        ' [%(funcName)s:%(lineno)d] %(message)s'),
-    stream=sys.stdout)
+        ' [%(funcName)s:%(lineno)d] %(message)s'))
 LOGGER = logging.getLogger(__name__)
 logging.getLogger('taskgraph').setLevel(logging.INFO)
 
@@ -190,8 +189,12 @@ def copy_gs(gs_uri, target_dir, token_file_path):
         os.makedirs(target_dir)
     except OSError:
         pass
+    gsutil_path = '/usr/local/gcloud-sdk/google-cloud-sdk/bin/gsutil'
+    if not os.path.exists(gsutil_path):
+        gsutil_path = 'gsutil'
+
     subprocess.run(
-        f'/usr/local/gcloud-sdk/google-cloud-sdk/bin/gsutil cp -r "{gs_uri}/*" "{target_dir}"',
+        f'{gsutil_path} cp -r "{gs_uri}/*" "{target_dir}"',
         shell=True, check=True)
     with open(token_file_path, 'w') as token_file:
         token_file.write("done")
@@ -247,6 +250,9 @@ def main():
         except OSError:
             pass
 
+    task_graph = taskgraph.TaskGraph(
+        WORKSPACE_DIR, multiprocessing.cpu_count(), 5.0)
+
     for bucket_uri, fieldname in BUCKET_FIELDNAME_LIST:
         m = hashlib.md5()
         m.update(bucket_uri.encode('utf-8'))
@@ -254,8 +260,6 @@ def main():
         local_download_dir = os.path.join(local_churn_dir, 'downloads')
         token_file = os.path.join(
             local_download_dir, f'{os.path.basename(bucket_uri)}.token')
-        task_graph = taskgraph.TaskGraph(
-            local_churn_dir, multiprocessing.cpu_count(), 5.0)
         copy_gs_task = task_graph.add_task(
             func=copy_gs,
             args=(bucket_uri, local_download_dir, token_file),
@@ -284,6 +288,8 @@ def main():
         global_vector = None
 
         for field_val in field_list:
+            if fieldname != 'IND':
+                continue
             if field_val in ISO_CODES_TO_SKIP:
                 continue
 
@@ -319,8 +325,8 @@ def main():
                     base_raster_path_list, clipped_raster_path_list,
                     ['near'] * len(clipped_raster_path_list),
                     [clipped_pixel_length, -clipped_pixel_length],
-                    'intersection',
-                    # [80, 20, 81, 21], # area in mid india
+                    #'intersection',
+                    [80, 20, 81, 21], # area in mid india
                     ),
                 kwargs={
                     'base_vector_path_list': [local_country_vector_path],
