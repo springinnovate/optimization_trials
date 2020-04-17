@@ -190,7 +190,7 @@ def copy_gs(gs_uri, target_dir, token_file_path):
     except OSError:
         pass
     subprocess.run(
-        f'gsutil cp -r "{gs_uri}/*" "{target_dir}"',
+        f'/usr/local/gcloud-sdk/google-cloud-sdk/bin/gsutil cp -r "{gs_uri}/*" "{target_dir}"',
         shell=True, check=True)
     with open(token_file_path, 'w') as token_file:
         token_file.write("done")
