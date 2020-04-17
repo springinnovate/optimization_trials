@@ -254,7 +254,7 @@ def main():
             pass
 
     task_graph = taskgraph.TaskGraph(
-        WORKSPACE_DIR, multiprocessing.cpu_count(), 5.0)
+        WORKSPACE_DIR, -1) #  multiprocessing.cpu_count(), 5.0)
 
     for bucket_uri, fieldname in BUCKET_FIELDNAME_LIST:
         m = hashlib.md5()
@@ -293,6 +293,8 @@ def main():
         # do india first
         field_list.remove('IND')
         field_list.insert(0, 'IND')
+        field_list.remove('ZWE')
+        field_list.insert(0, 'ZWE')
         LOGGER.debug('process this list: %s', field_list)
         for field_val in field_list:
             if field_val in ISO_CODES_TO_SKIP:
