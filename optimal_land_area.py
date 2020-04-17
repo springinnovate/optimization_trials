@@ -288,7 +288,7 @@ def main():
         global_vector = None
 
         for field_val in field_list:
-            if fieldname != 'IND':
+            if field_val != 'IND':
                 continue
             if field_val in ISO_CODES_TO_SKIP:
                 continue
