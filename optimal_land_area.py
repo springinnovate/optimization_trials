@@ -290,6 +290,7 @@ def main():
         # do india first
         field_list.delete('IND')
         field_list.insert(0, 'IND')
+        LOGGER.debug('process this list: %s', field_list)
         for field_val in field_list:
             if field_val in ISO_CODES_TO_SKIP:
                 continue
