@@ -18,6 +18,7 @@ Here's the plan:
 import glob
 import hashlib
 import logging
+import multiprocessing
 import os
 import subprocess
 import sys
@@ -252,7 +253,8 @@ def main():
         local_download_dir = os.path.join(local_churn_dir, 'downloads')
         token_file = os.path.join(
             local_download_dir, f'{os.path.basename(bucket_uri)}.token')
-        task_graph = taskgraph.TaskGraph(local_churn_dir, -1, 5.0)
+        task_graph = taskgraph.TaskGraph(
+            local_churn_dir, multiprocessing.cpu_count(), 5.0)
         copy_gs_task = task_graph.add_task(
             func=copy_gs,
             args=(bucket_uri, local_download_dir, token_file),
