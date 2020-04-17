@@ -155,7 +155,7 @@ RUN echo "export PATH=$PATH:/usr/local/gcloud-sdk/google-cloud-sdk/bin" >> /root
 
 RUN pip install \
     ecoshard \
-    git+https://github.com/richpsharp/pygeoprocessing.git@release/2.0
+    git+https://github.com/richpsharp/pygeoprocessing.git@feature/raster_optimization
 
 WORKDIR /usr/local/workspace
 ENTRYPOINT ["bash"]
