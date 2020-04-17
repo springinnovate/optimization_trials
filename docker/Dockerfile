@@ -159,4 +159,4 @@ WORKDIR /usr/local/pygeoprocessing
 RUN git checkout feature/raster_optimization && python setup.py install
 
 WORKDIR /usr/local/workspace
-ENTRYPOINT ["bash -c"]
+ENTRYPOINT ["bash"]
