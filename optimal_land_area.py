@@ -288,7 +288,7 @@ def main():
         global_vector = None
 
         # do india first
-        field_list.delete('IND')
+        field_list.remove('IND')
         field_list.insert(0, 'IND')
         LOGGER.debug('process this list: %s', field_list)
         for field_val in field_list:
