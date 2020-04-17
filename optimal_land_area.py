@@ -301,7 +301,6 @@ def main():
                 pass
 
             LOGGER.debug('%s: %s', os.path.basename(bucket_uri), field_val)
-            continue
 
             local_country_vector_path = os.path.join(
                 local_working_dir, f'{field_val}.gpkg')
