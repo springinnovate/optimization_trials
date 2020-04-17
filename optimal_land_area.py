@@ -59,6 +59,8 @@ logging.basicConfig(
 LOGGER = logging.getLogger(__name__)
 logging.getLogger('taskgraph').setLevel(logging.DEBUG)
 
+sys.stderr = LOGGER
+
 
 def sum_raster(raster_path_band):
     """Sum the raster and return the result."""
