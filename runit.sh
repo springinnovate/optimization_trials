@@ -1,3 +1,9 @@
 #!/bin/bash -i
-pip install git+https://github.com/richpsharp/pygeoprocessing.git@feature/raster_optimization --upgrade
+pushd /usr/local
+git clone https://github.com/richpsharp/pygeoprocessing.git
+pushd pygeoprocessing
+git checkout feature/raster_optimization
+python setup.py install
+popd
+popd
 python optimal_land_area.py
