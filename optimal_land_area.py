@@ -36,13 +36,14 @@ gdal.SetCacheMax(2**27)
 BASE_DATA_DIR = 'data'
 WORKSPACE_DIR = 'workspace_dir'
 CHURN_DIR = os.path.join(WORKSPACE_DIR, 'churn')
-RASTER_SUBSET_LIST = [
-    'realized_coastalprotection',
-    'realized_natureaccess10_nathab',
-    'realized_nitrogenretention_nathab_clamped',
-    'realized_pollination_nathab_clamped',
-    'realized_sedimentdeposition_nathab_clamped',
-]
+
+# each bucket has a handful of .tifs and a .gpkg, the fieldnam is the fielname
+# to iterate through
+BUCKET_FIELDNAME_LIST = [
+    ('gs://critical-natural-capital-ecoshards/realized_service_ecoshards/'
+     'by_country', 'iso3'),
+    ('gs://critical-natural-capital-ecoshards/realized_service_ecoshards/'
+     'by_eez', 'ISO_SOV1')]
 
 ISO_CODES_TO_SKIP = ['ATA']
 
@@ -244,106 +245,107 @@ def main():
         except OSError:
             pass
 
-    bucket_uri = (
-        'gs://critical-natural-capital-ecoshards/realized_service_ecoshards/'
-        'by_country')
-    m = hashlib.md5()
-    m.update(bucket_uri.encode('utf-8'))
-    local_churn_dir = os.path.join(CHURN_DIR, m.hexdigest())
-    local_download_dir = os.path.join(local_churn_dir, 'downloads')
-    token_file = os.path.join(
-        local_download_dir, f'{os.path.basename(bucket_uri)}.token')
-    task_graph = taskgraph.TaskGraph(local_churn_dir, -1, 5.0)
-    copy_gs_task = task_graph.add_task(
-        func=copy_gs,
-        args=(bucket_uri, local_download_dir, token_file),
-        target_path_list=[token_file])
-    copy_gs_task.join()
+    for bucket_uri, fieldname in BUCKET_FIELDNAME_LIST:
+        m = hashlib.md5()
+        m.update(bucket_uri.encode('utf-8'))
+        local_churn_dir = os.path.join(CHURN_DIR, m.hexdigest())
+        local_download_dir = os.path.join(local_churn_dir, 'downloads')
+        token_file = os.path.join(
+            local_download_dir, f'{os.path.basename(bucket_uri)}.token')
+        task_graph = taskgraph.TaskGraph(local_churn_dir, -1, 5.0)
+        copy_gs_task = task_graph.add_task(
+            func=copy_gs,
+            args=(bucket_uri, local_download_dir, token_file),
+            target_path_list=[token_file])
+        copy_gs_task.join()
 
-    # we know there's a "countries" .gpkg in there
-    global_vector_path = glob.glob(
-        os.path.join(local_download_dir, 'countries*.gpkg'))[0]
+        # we know there's a .gpkg in there
+        global_vector_path = glob.glob(
+            os.path.join(local_download_dir, '*.gpkg'))[0]
 
-    base_raster_path_list = [
-        path for path in glob.glob(os.path.join(local_download_dir, '*.tif'))
-        if any(x in path for x in RASTER_SUBSET_LIST)]
+        base_raster_path_list = [
+            path for path in glob.glob(os.path.join(
+                local_download_dir, '*.tif'))]
 
-    clipped_pixel_length = min([
-        pygeoprocessing.get_raster_info(path)['pixel_size'][0]
-        for path in base_raster_path_list])
+        clipped_pixel_length = min([
+            pygeoprocessing.get_raster_info(path)['pixel_size'][0]
+            for path in base_raster_path_list])
 
-    for country_iso in ['IND']:
-        country_working_dir = os.path.join(
-            local_churn_dir, 'country_workspaces', country_iso)
-        try:
-            os.makedirs(country_working_dir)
-        except OSError:
-            pass
+        # get fieldname set
+        global_vector = gdal.OpenEx(global_vector_path, gdal.OF_VECTOR)
+        global_layer = global_vector.GetLayer()
+        field_list = [
+            feature.GetField(fieldname) for feature in global_layer]
+        global_layer = None
+        global_vector = None
 
-        local_country_vector_path = os.path.join(
-            country_working_dir, f'{country_iso}.gpkg')
-        extract_task = task_graph.add_task(
-            func=extract_feature,
-            args=(global_vector_path, 'iso3', country_iso,
-                  local_country_vector_path),
-            hash_target_files=False,
-            target_path_list=[local_country_vector_path],
-            task_name=f'extract {country_iso}')
+        for field_val in field_list:
+            if field_val in ISO_CODES_TO_SKIP:
+                continue
 
-        clipped_raster_path_list = [
-            os.path.join(
-                country_working_dir, 'clipped', os.path.basename(raster_path))
-            for raster_path in base_raster_path_list]
+            local_working_dir = os.path.join(
+                local_churn_dir, os.path.basename(bucket_uri), field_val)
+            try:
+                os.makedirs(local_working_dir)
+            except OSError:
+                pass
 
-        align_task = task_graph.add_task(
-            func=pygeoprocessing.align_and_resize_raster_stack,
-            args=(
-                base_raster_path_list, clipped_raster_path_list,
-                ['near'] * len(clipped_raster_path_list),
-                [clipped_pixel_length, -clipped_pixel_length],
-                'intersection',
-                # [80, 20, 81, 21], # area in mid india
-                ),
-            kwargs={
-                'base_vector_path_list': [local_country_vector_path],
-                'vector_mask_options': {
-                    'mask_vector_path': local_country_vector_path,
-                }
-            },
-            dependent_task_list=[extract_task],
-            ignore_path_list=[local_country_vector_path],
-            target_path_list=clipped_raster_path_list,
-            task_name=f'clip align task for {country_iso}')
+            LOGGER.debug('%s: %s', os.path.basename(bucket_uri), field_val)
+            continue
 
-        target_suffix = country_iso
-        logging.getLogger('pygeoprocessing').setLevel(logging.DEBUG)
-        local_output_dir = os.path.join(
-            local_churn_dir, 'output', country_iso)
-        task_graph.add_task(
-            func=pygeoprocessing.raster_optimization,
-            args=(
-                [(x, 1) for x in clipped_raster_path_list],
-                country_working_dir, local_output_dir),
-            kwargs={'target_suffix': target_suffix},
-            dependent_task_list=[align_task],
-            target_path_list=[os.path.join(
-                local_output_dir, f'results_{target_suffix}.csv')],
-            transient_run=True,
-            task_name=f'optimize {country_iso}')
+            local_country_vector_path = os.path.join(
+                local_working_dir, f'{field_val}.gpkg')
+            extract_task = task_graph.add_task(
+                func=extract_feature,
+                args=(global_vector_path, fieldname, field_val,
+                      local_country_vector_path),
+                hash_target_files=False,
+                target_path_list=[local_country_vector_path],
+                task_name=f'extract {field_val}')
+
+            clipped_raster_path_list = [
+                os.path.join(
+                    local_working_dir, 'clipped',
+                    os.path.basename(raster_path))
+                for raster_path in base_raster_path_list]
+
+            align_task = task_graph.add_task(
+                func=pygeoprocessing.align_and_resize_raster_stack,
+                args=(
+                    base_raster_path_list, clipped_raster_path_list,
+                    ['near'] * len(clipped_raster_path_list),
+                    [clipped_pixel_length, -clipped_pixel_length],
+                    'intersection',
+                    # [80, 20, 81, 21], # area in mid india
+                    ),
+                kwargs={
+                    'base_vector_path_list': [local_country_vector_path],
+                    'vector_mask_options': {
+                        'mask_vector_path': local_country_vector_path,
+                    }
+                },
+                dependent_task_list=[extract_task],
+                ignore_path_list=[local_country_vector_path],
+                target_path_list=clipped_raster_path_list,
+                task_name=f'clip align task for {field_val}')
+
+            target_suffix = field_val
+            logging.getLogger('pygeoprocessing').setLevel(logging.DEBUG)
+            local_output_dir = os.path.join(
+                local_churn_dir, 'output', field_val)
+            task_graph.add_task(
+                func=pygeoprocessing.raster_optimization,
+                args=(
+                    [(x, 1) for x in clipped_raster_path_list],
+                    local_working_dir, local_output_dir),
+                kwargs={'target_suffix': target_suffix},
+                dependent_task_list=[align_task],
+                target_path_list=[os.path.join(
+                    local_output_dir, f'results_{target_suffix}.csv')],
+                task_name=f'optimize {field_val}')
 
     task_graph.join()
     task_graph.close()
-    return
-
-    # TODO: these show how to smooth the final raster val if desired
-    # optimal_raw_mask_path = os.path.join(
-    #     OUTPUT_DIR, f'optimal_mask_{target_suffix}.tif')
-
-    # smoothed_mask_path = os.path.join(
-    #     OUTPUT_DIR, f'smoothed_mask_{target_suffix}.tif')
-
-    # smooth_radius = 3
-    # smooth_mask(optimal_raw_mask_path, smooth_radius, smoothed_mask_path)
 
 
 if __name__ == '__main__':
