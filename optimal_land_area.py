@@ -272,15 +272,11 @@ def main():
 
         # do india first
         field_list.remove('IND')
-        field_list.insert(2, 'IND')
-        field_list.remove('ZWE')
-        field_list.insert(3, 'ZWE')
-        field_list.remove('BRA')
-        field_list.insert(1, 'BRA')
+        field_list.insert(0, 'IND')
         worker_pool = multiprocessing.Pool(
             multiprocessing.cpu_count(), maxtasksperchild=1)
         LOGGER.debug('process this list: %s', field_list)
-        for field_val in field_list[0:4]:
+        for field_val in field_list:
             if field_val in ISO_CODES_TO_SKIP:
                 continue
 
