@@ -278,8 +278,7 @@ def main():
         field_list.remove('BRA')
         field_list.insert(1, 'BRA')
         worker_pool = multiprocessing.Pool(
-            1, #multiprocessing.cpu_count(),
-            maxtasksperchild=1)
+            multiprocessing.cpu_count(), maxtasksperchild=1)
         LOGGER.debug('process this list: %s', field_list)
         for field_val in field_list[0:4]:
             if field_val in ISO_CODES_TO_SKIP:
@@ -328,6 +327,7 @@ def main():
                 ignore_path_list=[local_country_vector_path],
                 target_path_list=clipped_raster_path_list,
                 task_name=f'clip align task for {field_val}')
+            align_task.join()
 
             target_suffix = field_val
             logging.getLogger('pygeoprocessing').setLevel(logging.DEBUG)
@@ -347,7 +347,7 @@ def main():
                         local_working_dir, local_output_dir),
                     kwds={'target_suffix': target_suffix},
                     error_callback=optimization_error_handler)
-        break
+
     task_graph.join()
     task_graph.close()
     worker_pool.close()
@@ -358,7 +358,10 @@ def main():
 
 def optimization_error_handler(e):
     """Exception handler for worker pool."""
-    LOGGER.error('exception occurred: %e', str(e))
+    with open('error.txt', 'a') as error_file:
+        error_string = 'exception occurred: %e', str(e)
+        LOGGER.error(error_string)
+        error_file.write(error_string + '\n')
 
 
 if __name__ == '__main__':
