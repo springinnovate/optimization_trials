@@ -1,6 +1,6 @@
 # Build instructions:
-# docker build . -f Dockerfile -t ot:tag
-# docker run -it --rm -v `pwd`:/usr/local/workspace ot:tag
+# docker build docker -t ot:latest && docker run -it --rm -v `cwd`:/usr/local/workspace ot:latest
+# docker build docker -t ot:latest && docker run -it --rm -v %CD%:/usr/local/workspace ot:latest
 FROM python:3.8-slim-buster as builder
 
 RUN apt-get update
@@ -156,7 +156,7 @@ RUN echo "export PATH=$PATH:/usr/local/gcloud-sdk/google-cloud-sdk/bin" >> /root
 WORKDIR /usr/local
 RUN git clone https://github.com/richpsharp/pygeoprocessing.git
 WORKDIR /usr/local/pygeoprocessing
-RUN git checkout feature/raster_optimization && python setup.py install
+RUN git pull && git checkout e43f665] && python setup.py install
 
 WORKDIR /usr/local/workspace
 ENTRYPOINT ["bash"]

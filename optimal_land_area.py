@@ -1,20 +1,4 @@
-"""Try to get minimum land with no less than 90% of service.
-
-Here's the plan:
-    * Smooth the rasters w/ a gaussian blur first to flatten out any sharp
-      pixels.
-    * For each variable raster, make a connected components raster (polygon?)
-    * Then make a greatest combined marginal value polygon
-        * Everywhere connected components overlap, make that another polygon
-        * i.e. this polygon is where all the values are the same.
-    * For connected components:
-        * Must be in Cython...
-        * Go by iterblocks
-            * Look for pixel that is not connected and start search
-            * Grow out connected component until no other touching pixels.
-        * Polygonalize by making a point in every pixel center.
-
-"""
+"""Minimize land area selction while maximizing service."""
 import glob
 import hashlib
 import logging
@@ -52,15 +36,12 @@ ISO_CODES_TO_SKIP = ['ATA']
 TARGET_NODATA = -1
 PROP_NODATA = -1
 logging.basicConfig(
-    filename='log.txt',
     level=logging.DEBUG,
     format=(
         '%(asctime)s (%(relativeCreated)d) %(levelname)s %(name)s'
         ' [%(funcName)s:%(lineno)d] %(message)s'))
 LOGGER = logging.getLogger(__name__)
 logging.getLogger('taskgraph').setLevel(logging.INFO)
-
-sys.stderr = LOGGER
 
 
 def sum_raster(raster_path_band):
@@ -276,7 +257,7 @@ def main():
         base_raster_path_list = [
             path for path in glob.glob(os.path.join(
                 local_download_dir, '*.tif'))]
-
+        LOGGER.debug(base_raster_path_list)
         clipped_pixel_length = min([
             pygeoprocessing.get_raster_info(path)['pixel_size'][0]
             for path in base_raster_path_list])
@@ -291,11 +272,16 @@ def main():
 
         # do india first
         field_list.remove('IND')
-        field_list.insert(0, 'IND')
+        field_list.insert(2, 'IND')
         field_list.remove('ZWE')
-        field_list.insert(0, 'ZWE')
+        field_list.insert(3, 'ZWE')
+        field_list.remove('BRA')
+        field_list.insert(1, 'BRA')
+        worker_pool = multiprocessing.Pool(
+            1, #multiprocessing.cpu_count(),
+            maxtasksperchild=1)
         LOGGER.debug('process this list: %s', field_list)
-        for field_val in field_list:
+        for field_val in field_list[0:4]:
             if field_val in ISO_CODES_TO_SKIP:
                 continue
 
@@ -347,21 +333,32 @@ def main():
             logging.getLogger('pygeoprocessing').setLevel(logging.DEBUG)
             local_output_dir = os.path.join(
                 local_churn_dir, 'output', field_val)
-            task_graph.add_task(
-                func=pygeoprocessing.raster_optimization,
-                args=(
-                    [(x, 1) for x in clipped_raster_path_list],
-                    local_working_dir, local_output_dir),
-                kwargs={'target_suffix': target_suffix},
-                dependent_task_list=[align_task],
-                target_path_list=[os.path.join(
-                    local_output_dir, f'results_{target_suffix}.csv')],
-                task_name=f'optimize {field_val}')
 
+            expected_target_csv_path = os.path.join(
+                local_output_dir, f'results_{target_suffix}.csv')
+
+            if os.path.exists(expected_target_csv_path):
+                LOGGER.debug('%s exists, so skip', expected_target_csv_path)
+            else:
+                worker_pool.apply_async(
+                    func=pygeoprocessing.raster_optimization,
+                    args=(
+                        [(x, 1) for x in clipped_raster_path_list],
+                        local_working_dir, local_output_dir),
+                    kwds={'target_suffix': target_suffix},
+                    error_callback=optimization_error_handler)
+        break
     task_graph.join()
     task_graph.close()
+    worker_pool.close()
+    worker_pool.join()
     LOGGER.debug('task graph is all done')
     task_graph._terminate()
+
+
+def optimization_error_handler(e):
+    """Exception handler for worker pool."""
+    LOGGER.error('exception occurred: %e', str(e))
 
 
 if __name__ == '__main__':
