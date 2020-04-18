@@ -156,7 +156,7 @@ RUN echo "export PATH=$PATH:/usr/local/gcloud-sdk/google-cloud-sdk/bin" >> /root
 WORKDIR /usr/local
 RUN git clone https://github.com/richpsharp/pygeoprocessing.git
 WORKDIR /usr/local/pygeoprocessing
-RUN git pull && git checkout e43f665] && python setup.py install
+RUN git pull && git checkout e43f665 && python setup.py install
 
 WORKDIR /usr/local/workspace
 ENTRYPOINT ["bash"]
