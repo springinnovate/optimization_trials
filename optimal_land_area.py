@@ -303,7 +303,11 @@ def main():
             geom = feature.GetGeometryRef()
             fid_order_list.append(
                 (feature.GetFID(), feature.GetField(fieldname), geom.Area()))
+            LOGGER.debug(fid_order_list[-1])
+            geom = None
+            feature = None
 
+        LOGGER.debug('sort list')
         fid_order_list = sorted(fid_order_list, lambda x: x[-1])
         global_layer = None
         global_vector = None
