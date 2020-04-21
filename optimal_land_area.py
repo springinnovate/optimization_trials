@@ -265,7 +265,7 @@ def main():
         local_download_dir = os.path.join(local_churn_dir, 'downloads')
         token_file = os.path.join(
             local_download_dir, f'{os.path.basename(bucket_uri)}.token')
-        copy_gs_task = task_graph.add_task(
+        copy_gs_dir_task = task_graph.add_task(
             func=copy_gs,
             args=(bucket_uri, local_download_dir, token_file),
             target_path_list=[token_file],
@@ -280,6 +280,7 @@ def main():
             target_path_list=[global_vector_path],
             task_name=f'copy {bucket_uri}')
 
+        copy_gs_dir_task.join()
         copy_gs_task.join()
 
         # we know there's a .gpkg in there
