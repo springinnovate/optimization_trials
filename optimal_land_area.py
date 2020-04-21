@@ -190,6 +190,22 @@ def copy_gs(gs_uri, target_dir, token_file_path):
         token_file.write("done")
 
 
+def copy_gs_single(gs_uri, target_path):
+    """Copy uri dir to target and touch a token_file."""
+    LOGGER.debug(' to copy %s to %s', gs_uri, target_path)
+    try:
+        os.makedirs(os.path.dirname(target_path))
+    except OSError:
+        pass
+    gsutil_path = '/usr/local/gcloud-sdk/google-cloud-sdk/bin/gsutil'
+    if not os.path.exists(gsutil_path):
+        gsutil_path = 'gsutil'
+
+    subprocess.run(
+        f'{gsutil_path} cp "{gs_uri}" "{target_path}"',
+        shell=True, check=True)
+
+
 def extract_feature(
         base_vector_path, base_fieldname, base_fieldname_value,
         target_vector_path):
@@ -257,13 +273,11 @@ def main():
 
         global_vector_path = os.path.join(
             local_download_dir, os.path.basename(bucket_vector_uri))
-        global_vector_token_file = f'{token_file}.token'
         copy_gs_task = task_graph.add_task(
-            func=copy_gs,
+            func=copy_gs_single,
             args=(
-                bucket_vector_uri, local_download_dir,
-                global_vector_token_file),
-            target_path_list=[token_file],
+                bucket_vector_uri, global_vector_path),
+            target_path_list=[global_vector_path],
             task_name=f'copy {bucket_uri}')
 
         copy_gs_task.join()
