@@ -25,10 +25,15 @@ CHURN_DIR = os.path.join(WORKSPACE_DIR, 'churn')
 # each bucket has a handful of .tifs and a .gpkg, the fieldnam is the fielname
 # to iterate through
 BUCKET_FIELDNAME_LIST = [
+    # ('gs://critical-natural-capital-ecoshards/realized_service_ecoshards/'
+    #  'by_country', 'iso3'),
+    # ('gs://critical-natural-capital-ecoshards/realized_service_ecoshards/'
+    #  'by_eez', 'ISO_SOV1'),
     ('gs://critical-natural-capital-ecoshards/realized_service_ecoshards/'
-     'by_country', 'iso3'),
-    ('gs://critical-natural-capital-ecoshards/realized_service_ecoshards/'
-     'by_eez', 'ISO_SOV1'),
+     'by_country', 'iso3',
+     'gs://critical-natural-capital-ecoshards/realized_service_ecoshards/'
+     'by_country/'
+     'countries_singlepart_md5_b7aaa5bc55cefc1f28d9655629c2c702.gpkg'),
     ]
 
 ISO_CODES_TO_SKIP = ['ATA']
@@ -237,7 +242,7 @@ def main():
 
     task_graph = taskgraph.TaskGraph(WORKSPACE_DIR, -1)
 
-    for bucket_uri, fieldname in BUCKET_FIELDNAME_LIST:
+    for bucket_uri, fieldname, bucket_vector_uri in BUCKET_FIELDNAME_LIST:
         m = hashlib.md5()
         m.update(bucket_uri.encode('utf-8'))
         local_churn_dir = os.path.join(CHURN_DIR, m.hexdigest())
@@ -249,11 +254,21 @@ def main():
             args=(bucket_uri, local_download_dir, token_file),
             target_path_list=[token_file],
             task_name=f'copy {bucket_uri}')
+
+        global_vector_path = os.path.join(
+            local_download_dir, os.path.basename(bucket_vector_uri))
+        global_vector_token_file = f'{token_file}.token'
+        copy_gs_task = task_graph.add_task(
+            func=copy_gs,
+            args=(
+                bucket_vector_uri, local_download_dir,
+                global_vector_token_file),
+            target_path_list=[token_file],
+            task_name=f'copy {bucket_uri}')
+
         copy_gs_task.join()
 
         # we know there's a .gpkg in there
-        global_vector_path = glob.glob(
-            os.path.join(local_download_dir, '*.gpkg'))[0]
 
         base_raster_path_list = [
             path for path in glob.glob(os.path.join(
@@ -268,16 +283,21 @@ def main():
         global_layer = global_vector.GetLayer()
         field_list = [
             feature.GetField(fieldname) for feature in global_layer]
+        fid_order_list = []
+        for feature in global_layer:
+            geom = feature.GetGeometryRef()
+            fid_order_list.append(
+                (feature.GetFID(), feature.GetField(fieldname), geom.Area()))
+
+        fid_order_list = sorted(fid_order_list, lambda x: x[-1])
         global_layer = None
         global_vector = None
 
         # do india first
-        field_list.remove('IND')
-        field_list.insert(0, 'IND')
         worker_pool = multiprocessing.Pool(
             multiprocessing.cpu_count(), maxtasksperchild=1)
         LOGGER.debug('process this list: %s', field_list)
-        for field_val in field_list:
+        for fid, field_val, _ in fid_order_list:
             if field_val in ISO_CODES_TO_SKIP:
                 continue
 
