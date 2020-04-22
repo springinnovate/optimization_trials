@@ -4,4 +4,4 @@
 # git checkout feature/raster_optimization
 # python setup.py install
 # popd
-python optimal_land_area.py 2>&1
+python optimal_land_area.py
